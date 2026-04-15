@@ -19,6 +19,7 @@ workspace = true
 [dependencies]
 log = { version = "0.4", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
 
 [features]
 test-helpers = []
