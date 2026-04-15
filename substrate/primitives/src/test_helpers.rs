@@ -1,6 +1,7 @@
 //! Test helpers for generating random instances of primitive types.
 
 use alloc::{vec, vec::Vec};
+
 use rand_core::{RngCore, CryptoRng};
 
 use crate::{
@@ -27,7 +28,7 @@ pub fn random_bytes_64<R: RngCore + CryptoRng>(rng: &mut R) -> [u8; 64] {
 
 /// Generate a random `Vec<u8>` with a random length between 1 and 128.
 pub fn random_vec_u8<R: RngCore + CryptoRng>(rng: &mut R) -> Vec<u8> {
-  let len = (rng.next_u32() % 128) as usize + 1;
+  let len = usize::try_from(rng.next_u32() % 128).unwrap() + 1;
   random_vec_of_len(rng, len)
 }
 
@@ -40,7 +41,17 @@ pub fn random_vec_of_len<R: RngCore + CryptoRng>(rng: &mut R, len: usize) -> Vec
 
 /// Generate a random [`ExternalAddress`].
 pub fn random_external_address<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalAddress {
-  ExternalAddress::try_from(random_bytes_32(rng).to_vec()).unwrap()
+  let len = usize::try_from(rng.next_u32() % ExternalAddress::MAX_SIZE).unwrap();
+  let mut external_address = vec![0; len];
+  rng.fill_bytes(&mut external_address);
+  ExternalAddress::try_from(external_address).unwrap()
+}
+
+#[test]
+fn random_external_address_is_in_range() {
+  for _ in 0 .. (128 * ExternalAddress::MAX_SIZE) {
+    random_external_address(&mut rand_core::OsRng);
+  }
 }
 
 /// Generate a random [`SeraiAddress`].
@@ -62,7 +73,17 @@ pub fn random_keypair<R: RngCore + CryptoRng>(rng: &mut R) -> (schnorrkel::Keypa
 
 /// Generate a random [`ExternalKey`].
 pub fn random_external_key<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalKey {
-  ExternalKey(random_bytes_32(rng).to_vec().try_into().unwrap())
+  let len = usize::try_from(rng.next_u32() % ExternalKey::MAX_SIZE).unwrap();
+  let mut external_key = vec![0; len];
+  rng.fill_bytes(&mut external_key);
+  ExternalKey(external_key.try_into().unwrap())
+}
+
+#[test]
+fn random_external_key_is_in_range() {
+  for _ in 0 .. (128 * ExternalKey::MAX_SIZE) {
+    random_external_key(&mut rand_core::OsRng);
+  }
 }
 
 /// Generate a random [`BlockHash`].
@@ -88,7 +109,7 @@ pub fn random_block_number<R: RngCore + CryptoRng>(rng: &mut R) -> u64 {
 /// Generate a random [`ExternalNetworkId`].
 pub fn random_external_network_id<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalNetworkId {
   let all: Vec<_> = ExternalNetworkId::all().collect();
-  all[(rng.next_u32() as usize) % all.len()]
+  all[usize::try_from(rng.next_u32()).unwrap() % all.len()]
 }
 
 /// Generate a random [`ExternalValidatorSet`].

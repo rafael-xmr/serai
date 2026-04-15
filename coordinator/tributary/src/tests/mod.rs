@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ciphersuite::group::GroupEncoding;
+use ciphersuite::group::GroupEncoding as _;
 use ciphersuite::WrappedGroup;
 use dalek_ff_group::{Ristretto, RistrettoPoint};
 use messages::sign::VariantSignId;
@@ -47,14 +47,14 @@ pub(crate) fn random_key<R: RngCore + CryptoRng>(
   Zeroizing::new(<Ristretto as WrappedGroup>::F::random(&mut *rng))
 }
 
-pub(crate) fn get_key_point(key: Zeroizing<<Ristretto as WrappedGroup>::F>) -> RistrettoPoint {
-  Ristretto::generator() * *key
+pub(crate) fn get_key_point(key: &Zeroizing<<Ristretto as WrappedGroup>::F>) -> RistrettoPoint {
+  Ristretto::generator() * **key
 }
 
 pub(crate) fn random_serai_address_and_key<R: RngCore + CryptoRng>(
   rng: &mut R,
 ) -> (RistrettoPoint, SeraiAddress) {
-  let key = get_key_point(random_key(rng));
+  let key = get_key_point(&random_key(rng));
   (key, SeraiAddress(key.to_bytes()))
 }
 
@@ -64,8 +64,9 @@ pub(crate) fn random_signed<R: RngCore + CryptoRng>(rng: &mut R) -> Signed {
 }
 
 /// One of each signed transaction kind, and attempts: at 0, a random attempt, and u32::MAX.
-pub(crate) fn all_signed_transactions_and_attempts(signed: Signed) -> Vec<Transaction> {
+pub(crate) fn all_signed_transactions_and_attempts(signed: &Signed) -> Vec<Transaction> {
   let random_attempt = OsRng.gen_range(1u32 .. u32::MAX);
+  let signed = *signed;
   vec![
     // RemoveParticipant
     Transaction::RemoveParticipant { participant: random_serai_address(&mut OsRng), signed },
@@ -160,7 +161,7 @@ pub(crate) fn all_provided_transactions() -> Vec<Transaction> {
 
 /// One of each of all transaction kinds.
 pub(crate) fn all_transactions() -> Vec<Transaction> {
-  let mut txs = all_signed_transactions_and_attempts(random_signed(&mut OsRng));
+  let mut txs = all_signed_transactions_and_attempts(&random_signed(&mut OsRng));
   txs.extend(all_provided_transactions());
   txs
 }
@@ -231,7 +232,7 @@ pub(crate) fn make_signed_message_bytes(sender: [u8; 32]) -> Vec<u8> {
 
 /// Drain expected messages produced by the given transactions, then assert both queues are empty.
 ///
-/// Some transactions produce messages on first submission (e.g. DkgParticipation, Cosign).
+/// Some transactions produce messages on first submission (DkgParticipation, Cosign, SlashReport).
 /// This function drains those expected messages before calling `assert_no_pending_messages`.
 pub(crate) fn assert_block_side_effects(
   txn: &mut impl serai_db::DbTxn,
@@ -259,7 +260,13 @@ pub(crate) fn assert_block_side_effects(
             "SlashReport topic should be recognized",
           );
         }
-        _ => {}
+        Transaction::RemoveParticipant { .. } |
+        Transaction::DkgConfirmationPreprocess { .. } |
+        Transaction::DkgConfirmationShare { .. } |
+        Transaction::Cosigned { .. } |
+        Transaction::SubstrateBlock { .. } |
+        Transaction::Batch { .. } |
+        Transaction::Sign { .. } => {}
       },
       tributary_sdk::Transaction::Tendermint(_) => {}
     }
@@ -294,34 +301,28 @@ pub(crate) fn new_test_set_info(validators: &[(SeraiAddress, u16)]) -> NewSetInf
   }
 }
 
-/// Generate `n` random validators (weight 1 each) with keys, returning all derived collections.
-pub(crate) fn setup_n_validators_with_keys(
-  n: usize,
-) -> (
+pub(crate) type ValidatorSetup = (
   Vec<(RistrettoPoint, SeraiAddress)>,
   Vec<(SeraiAddress, u16)>,
   Vec<SeraiAddress>,
   HashMap<SeraiAddress, u16>,
   u16,
-) {
+);
+
+/// Generate `n` random validators (weight 1 each) with keys, returning all derived collections.
+pub(crate) fn setup_n_validators_with_keys(n: u16) -> ValidatorSetup {
   let keys_addrs: Vec<(RistrettoPoint, SeraiAddress)> =
     (0 .. n).map(|_| random_serai_address_and_key(&mut OsRng)).collect();
   let validator_data: Vec<(SeraiAddress, u16)> =
     keys_addrs.iter().map(|(_, addr)| (*addr, 1u16)).collect();
   let validators: Vec<SeraiAddress> = validator_data.iter().map(|(a, _)| *a).collect();
   let weights: HashMap<SeraiAddress, u16> = validator_data.iter().copied().collect();
-  let total_weight = n as u16;
+  let total_weight = n;
 
   (keys_addrs, validator_data, validators, weights, total_weight)
 }
 
 /// Common test setup with 3 random validators each with weight 1, total_weight = 3.
-pub(crate) fn setup_test_validators_and_weights_with_keys() -> (
-  Vec<(RistrettoPoint, SeraiAddress)>,
-  Vec<(SeraiAddress, u16)>,
-  Vec<SeraiAddress>,
-  HashMap<SeraiAddress, u16>,
-  u16,
-) {
+pub(crate) fn setup_test_validators_and_weights_with_keys() -> ValidatorSetup {
   setup_n_validators_with_keys(3)
 }

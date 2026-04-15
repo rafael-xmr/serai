@@ -52,7 +52,8 @@ pub(crate) enum Participating {
 }
 
 pub(crate) fn required_participation(n: u16) -> u16 {
-  n.checked_mul(2).expect(&format!("required_participation overflowed: {n} * 2")) / 3 + 1
+  // All of our topics require 2/3rds participation
+  n.checked_mul(2).unwrap_or_else(|| panic!("required_participation overflowed: {n} * 2")) / 3 + 1
 }
 
 impl Topic {
@@ -60,16 +61,17 @@ impl Topic {
   pub(crate) fn next_attempt_topic(self) -> Option<Topic> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
       Topic::DkgConfirmation { attempt, round: _ } => Some(Topic::DkgConfirmation {
         attempt: attempt.checked_add(1)?,
         round: SigningProtocolRound::Preprocess,
       }),
+      Topic::SlashReport => None,
       Topic::Sign { id, attempt, round: _ } => Some(Topic::Sign {
         id,
         attempt: attempt.checked_add(1)?,
         round: SigningProtocolRound::Preprocess,
       }),
-      Topic::RemoveParticipant { .. } | Topic::SlashReport => None,
     }
   }
 
@@ -77,6 +79,7 @@ impl Topic {
   pub(crate) fn reattempt_topic(self) -> Option<(u32, Topic)> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
       Topic::DkgConfirmation { attempt, round } => match round {
         SigningProtocolRound::Preprocess => {
           let next_attempt = attempt.checked_add(1)?;
@@ -90,6 +93,7 @@ impl Topic {
         }
         SigningProtocolRound::Share => None,
       },
+      Topic::SlashReport => None,
       Topic::Sign { id, attempt, round } => match round {
         SigningProtocolRound::Preprocess => {
           let next_attempt = attempt.checked_add(1)?;
@@ -100,7 +104,6 @@ impl Topic {
         }
         SigningProtocolRound::Share => None,
       },
-      Topic::RemoveParticipant { .. } | Topic::SlashReport => None,
     }
   }
 
@@ -110,8 +113,10 @@ impl Topic {
   pub(crate) fn sign_id(self, set: ExternalValidatorSet) -> Option<messages::sign::SignId> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
+      Topic::DkgConfirmation { .. } => None,
+      Topic::SlashReport => None,
       Topic::Sign { id, attempt, round: _ } => Some(SignId { session: set.session, id, attempt }),
-      Topic::RemoveParticipant { .. } | Topic::DkgConfirmation { .. } | Topic::SlashReport => None,
     }
   }
 
@@ -127,6 +132,7 @@ impl Topic {
   ) -> Option<messages::sign::SignId> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
       Topic::DkgConfirmation { attempt, round: _ } => Some({
         let id = {
           let mut id = [0; 32];
@@ -136,7 +142,8 @@ impl Topic {
         };
         SignId { session: set.session, id, attempt }
       }),
-      Topic::RemoveParticipant { .. } | Topic::SlashReport | Topic::Sign { .. } => None,
+      Topic::SlashReport => None,
+      Topic::Sign { .. } => None,
     }
   }
 
@@ -146,19 +153,20 @@ impl Topic {
   pub(crate) fn preceding_topic(self) -> Option<Topic> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
       Topic::DkgConfirmation { attempt, round } => match round {
         SigningProtocolRound::Preprocess => None,
         SigningProtocolRound::Share => {
           Some(Topic::DkgConfirmation { attempt, round: SigningProtocolRound::Preprocess })
         }
       },
+      Topic::SlashReport => None,
       Topic::Sign { id, attempt, round } => match round {
         SigningProtocolRound::Preprocess => None,
         SigningProtocolRound::Share => {
           Some(Topic::Sign { id, attempt, round: SigningProtocolRound::Preprocess })
         }
       },
-      Topic::RemoveParticipant { .. } | Topic::SlashReport => None,
     }
   }
 
@@ -168,19 +176,20 @@ impl Topic {
   pub(crate) fn succeeding_topic(self) -> Option<Topic> {
     #[expect(clippy::match_same_arms)]
     match self {
+      Topic::RemoveParticipant { .. } => None,
       Topic::DkgConfirmation { attempt, round } => match round {
         SigningProtocolRound::Preprocess => {
           Some(Topic::DkgConfirmation { attempt, round: SigningProtocolRound::Share })
         }
         SigningProtocolRound::Share => None,
       },
+      Topic::SlashReport => None,
       Topic::Sign { id, attempt, round } => match round {
         SigningProtocolRound::Preprocess => {
           Some(Topic::Sign { id, attempt, round: SigningProtocolRound::Share })
         }
         SigningProtocolRound::Share => None,
       },
-      Topic::RemoveParticipant { .. } | Topic::SlashReport => None,
     }
   }
 
@@ -202,8 +211,10 @@ impl Topic {
   pub(crate) fn participating(&self) -> Participating {
     #[expect(clippy::match_same_arms)]
     match self {
-      Topic::RemoveParticipant { .. } | Topic::SlashReport => Participating::Everyone,
-      Topic::DkgConfirmation { .. } | Topic::Sign { .. } => Participating::Participated,
+      Topic::RemoveParticipant { .. } => Participating::Everyone,
+      Topic::DkgConfirmation { .. } => Participating::Participated,
+      Topic::SlashReport => Participating::Everyone,
+      Topic::Sign { .. } => Participating::Participated,
     }
   }
 }
@@ -337,7 +348,8 @@ impl TributaryDb {
     );
   }
   pub(crate) fn finish_cosigning(txn: &mut impl DbTxn, set: ExternalValidatorSet) {
-    ActivelyCosigning::take(txn, set).expect("finished cosigning but wasn't cosigning");
+    ActivelyCosigning::take(txn, set)
+      .expect("tried to finish cosigning but wasn't actively cosigning");
   }
   pub(crate) fn mark_cosigned(
     txn: &mut impl DbTxn,
@@ -479,9 +491,9 @@ impl TributaryDb {
     }
 
     // Accumulate the data
-    accumulated_weight = accumulated_weight.checked_add(validator_weight).expect(&format!(
-      "accumulated_weight {accumulated_weight} overflowed adding validator_weight {validator_weight}"
-    ));
+    accumulated_weight = accumulated_weight.checked_add(validator_weight).unwrap_or_else(|| {
+      panic!("accumulated {accumulated_weight} overflowed adding validator's {validator_weight}")
+    });
     AccumulatedWeight::set(txn, set, topic, &accumulated_weight);
     Accumulated::set(txn, set, topic, validator, data);
 
@@ -493,9 +505,11 @@ impl TributaryDb {
         // Linearly scale the time for the protocol with the attempt number
         let blocks_till_reattempt = u64::from(attempt) * u64::from(BASE_REATTEMPT_DELAY);
 
-        let recognize_at = block_number.checked_add(blocks_till_reattempt).expect(&format!(
-          "recognize_at overflowed: block_number {block_number} + delay {blocks_till_reattempt}"
-        ));
+        let recognize_at = block_number.checked_add(blocks_till_reattempt).unwrap_or_else(|| {
+          panic!(
+            "recognize_at overflowed: block_number {block_number} + delay {blocks_till_reattempt}",
+          );
+        });
         let mut queued = Reattempt::get(txn, set, recognize_at).unwrap_or(Vec::with_capacity(1));
         queued.push(reattempt_topic);
         Reattempt::set(txn, set, recognize_at, &queued);
