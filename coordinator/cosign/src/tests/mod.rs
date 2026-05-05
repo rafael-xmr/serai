@@ -26,7 +26,8 @@ use serai_client_serai::{
 use serai_db::{DbTxn, Db as _, MemDb};
 use serai_task::{
   ContinuallyRan, Task,
-  test_helpers::{IntoTask, TaskTest},
+  test_helpers::{IntoTask, TaskTest, IntoShimSerai},
+  impl_serai_task_test_struct,
 };
 use serai_cosign_types::{
   SignedCosign,
@@ -36,7 +37,7 @@ use serai_cosign_types::{
   },
 };
 
-use serai_shim_rpc::{*, event_fuzzer::*};
+use serai_shim_rpc::event_fuzzer::*;
 
 use crate::{GlobalSession, RequestNotableCosigns};
 
@@ -84,13 +85,6 @@ impl RequestNotableCosigns for TestRequest {
       }
     }
   }
-}
-
-/// Create a [`SeraiShimRpc`] and an [`Arc<Serai>`] to use it.
-async fn setup_shim_serai() -> (SeraiShimRpc, Arc<Serai>) {
-  let shim_serai = SeraiShimRpc::start(ShimState::default()).await;
-  let serai = Arc::new(Serai::new(shim_serai.url()).unwrap());
-  (shim_serai, serai)
 }
 
 fn default_test_validator_set() -> ExternalValidatorSet {

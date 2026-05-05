@@ -6,6 +6,8 @@ struct EvaluatorTest {
   db: MemDb,
 }
 
+impl_serai_task_test_struct!(EvaluatorTest, { db: db });
+
 impl Default for EvaluatorTest {
   fn default() -> Self {
     Self { db: MemDb::new() }

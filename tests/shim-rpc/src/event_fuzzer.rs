@@ -1,6 +1,6 @@
 //! Random event, state, and block generator for fuzz testing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rand_core::{RngCore as _, OsRng};
 
@@ -9,7 +9,7 @@ use serai_abi::{
     address::SeraiAddress,
     crypto::KeyPair,
     network_id::{ExternalNetworkId, NetworkId},
-    validator_sets::{ExternalValidatorSet, KeyShares, Session, ValidatorSet},
+    validator_sets::{ExternalValidatorSet, KeyShares, Session, Slash, ValidatorSet},
     test_helpers::{
       random_external_address, random_external_key, random_keypair, random_serai_address,
     },
@@ -17,7 +17,7 @@ use serai_abi::{
   validator_sets, Event,
 };
 
-use crate::test_helpers::*;
+use crate::{test_helpers::*, event_generator::in_instructions_events};
 
 /// Random event, state, and block generator.
 pub struct EventFuzzer {
@@ -25,6 +25,8 @@ pub struct EventFuzzer {
   pub validators: Vec<SeraiAddress>,
   /// All networks.
   networks: Vec<NetworkId>,
+  /// External networks.
+  external_networks: Vec<ExternalNetworkId>,
   /// Running stake ledger: `(network, validator) -> accumulated_stake`.
   // TODO: Track for `NetworkId`, not `ExternalNetworkId`
   stakes: HashMap<(ExternalNetworkId, SeraiAddress), u64>,
@@ -34,6 +36,10 @@ pub struct EventFuzzer {
   pub next_session: HashMap<ExternalNetworkId, u32>,
   /// Keypairs indexed by public key bytes, for signing cosigns.
   pub keypairs: HashMap<[u8; 32], schnorrkel::Keypair>,
+  /// Networks that have already received a Batch event this block.
+  batches_this_block: HashSet<ExternalNetworkId>,
+  /// Next batch ID per network (increments by 1 per batch).
+  batch_ids: HashMap<ExternalNetworkId, u32>,
 }
 
 impl EventFuzzer {
@@ -46,14 +52,19 @@ impl EventFuzzer {
       (0 .. num_validators).map(|_| random_serai_address(&mut OsRng)).collect();
 
     let networks: Vec<NetworkId> = NetworkId::all().collect();
+    let external_networks: Vec<ExternalNetworkId> =
+      networks.iter().copied().filter_map(|n| ExternalNetworkId::try_from(n).ok()).collect();
 
     Self {
       validators,
       networks,
+      external_networks,
       stakes: HashMap::new(),
       pending_keys: HashMap::new(),
       next_session: HashMap::new(),
       keypairs: HashMap::new(),
+      batches_this_block: HashSet::new(),
+      batch_ids: HashMap::new(),
     }
   }
 
@@ -178,8 +189,56 @@ impl EventFuzzer {
     )
   }
 
+  /// Generate a random Batch event.
+  pub fn random_batch(&mut self) -> Option<Event> {
+    let network = *Self::pick(&self.external_networks.clone());
+    if self.batches_this_block.contains(&network) {
+      return None;
+    }
+    self.batches_this_block.insert(network);
+    let session_num = *self.next_session.entry(network).or_insert(0);
+    self.batch_ids.entry(network).and_modify(|id| *id += 1).or_insert(0);
+    let id = *self.batch_ids.entry(network).or_insert(0);
+    Some(in_instructions_events::batch(&mut OsRng, network, Session(session_num), id))
+  }
+
+  /// Generate a random Slashes event for an external network set that has set its keys.
+  pub fn random_slash_report(&mut self) -> Option<Event> {
+    // Find networks that have at least one session completed (keys have been set)
+    let eligible: Vec<ExternalNetworkId> = self
+      .external_networks
+      .iter()
+      .copied()
+      .filter(|n| self.next_session.get(n).copied().unwrap_or(0) > 0)
+      .collect();
+    if eligible.is_empty() {
+      return None;
+    }
+
+    let network = *Self::pick(&eligible);
+    // Session is the most recently keyed session for this network
+    let session_num = self.next_session[&network] - 1;
+    let set = ExternalValidatorSet { network, session: Session(session_num) };
+
+    // Build a random SlashReport
+    let num_slashes = usize::try_from(OsRng.next_u64() % 4).unwrap() + 1; // 1..=4
+    let mut slashes = Vec::with_capacity(num_slashes);
+    for _ in 0 .. num_slashes {
+      slashes.push(if (OsRng.next_u64() % 4) == 0 {
+        Slash::Fatal
+      } else {
+        Slash::Points(OsRng.next_u32() % 100_000)
+      });
+    }
+
+    Some(slash_report_event(set))
+  }
+
   /// Generate random events for a single block.
   fn generate_block_events(&mut self) -> Vec<Vec<Event>> {
+    // New blocks, reset network batch counter
+    self.batches_this_block.clear();
+
     let num_events = OsRng.next_u64() % 8; // 0..=7 events per block
     if num_events == 0 {
       return vec![];
@@ -190,14 +249,18 @@ impl EventFuzzer {
     let mut set_decided_count = 0u64;
     let mut set_keys_count = 0u64;
     let mut burn_count = 0u64;
+    let mut batch_count = 0u64;
+    let mut slash_report_count = 0u64;
 
     for _ in 0 .. num_events {
-      match OsRng.next_u64() % 100 {
-        0 ..= 35 => alloc_count += 1,
-        36 ..= 55 => dealloc_count += 1,
-        56 ..= 70 => set_decided_count += 1,
-        71 ..= 85 => set_keys_count += 1,
-        86 ..= 99 => burn_count += 1,
+      match OsRng.next_u64() % 7 {
+        0 => alloc_count += 1,
+        1 => dealloc_count += 1,
+        2 => set_decided_count += 1,
+        3 => set_keys_count += 1,
+        4 => burn_count += 1,
+        5 => batch_count += 1,
+        6 => slash_report_count += 1,
         _ => unreachable!(),
       }
     }
@@ -224,6 +287,16 @@ impl EventFuzzer {
     }
     for _ in 0 .. burn_count {
       events.push(self.random_burn());
+    }
+    for _ in 0 .. batch_count {
+      if let Some(event) = self.random_batch() {
+        events.push(event);
+      }
+    }
+    for _ in 0 .. slash_report_count {
+      if let Some(event) = self.random_slash_report() {
+        events.push(event);
+      }
     }
 
     // Shuffle the events to test order-independence

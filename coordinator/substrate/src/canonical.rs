@@ -49,15 +49,16 @@ impl<D: Db> ContinuallyRan for CanonicalEventStream<D> {
 
   fn run_iteration(&mut self) -> impl Send + Future<Output = Result<bool, Self::Error>> {
     async move {
-      let next_block = NextBlock::get(&self.db).unwrap_or(0);
-      let Some(latest_finalized_block) =
-        Cosigning::<D>::latest_cosigned_block_number(&self.db).map_err(|e| format!("{e:?}"))?
+      let Some(latest_cosigned_block_number) =
+        Cosigning::<D>::latest_cosigned_block_number(&self.db)
+          // Errors if Faulted session exists and keeps re-trying this task
+          // protocol will be halted not able to progress
+          .map_err(|e| format!("Error getting latest cosigned block number: {e:?}"))?
       else {
         return Ok(false);
       };
 
       let start_scan_block_number = ScanCanonicalBlocksFrom::get(&self.db).unwrap_or(0);
-
       self.process_range(start_scan_block_number, latest_cosigned_block_number).await
     }
   }
@@ -79,22 +80,39 @@ impl<D: Db> RangeProcessor for CanonicalEventStream<D> {
       let block_hash = match block_hash {
         Ok(Some(block_hash)) => block_hash,
         Ok(None) => {
-          panic!("iterating to latest cosigned block but couldn't get cosigned block")
+          panic!(
+            "iterating to latest cosigned block but couldn't get \
+             cosigned block number {block_number}"
+          )
         }
         Err(serai_cosign::Faulted) => return Err("cosigning process faulted".to_owned()),
       };
-      let events = serai.events(block_hash).await.map_err(|e| format!("{e}"))?;
+
+      let serai_block = serai
+        .block(block_hash)
+        .await
+        .map_err(|e| format!("RPC error fetching block #{block_hash}: {e}"))?
+        .unwrap_or_else(|| {
+          // If latest_cosigned_block_number returned this block number
+          // as cosigned and we iterated to it then it must exist on serai
+          panic!(
+            "Serai node didn't have block #{block_number} which should've been finalized and \
+             cosigned"
+          )
+        });
+
+      let events = serai
+        .events(block_hash)
+        .await
+        .map_err(|e| format!("RPC error fetching block events #{block_hash}: {e}"))?;
       let validator_sets_events = events.validator_sets();
       let set_keys_events = validator_sets_events.set_keys_events().cloned().collect();
       let slash_report_events = validator_sets_events.slashes_events().cloned().collect();
       let batch_events = events.in_instructions().batch_events().cloned().collect();
       let burn_events = events.coins().burn_with_instruction_events().cloned().collect();
-      let Some(block) = serai.block(block_hash).await.map_err(|e| format!("{e:?}"))? else {
-        Err(format!("Serai node didn't have cosigned block #{block_number}"))?
-      };
 
       // We use time in seconds, not milliseconds, here
-      let time = block.header.unix_time_in_millis() / 1000;
+      let time = serai_block.header.unix_time_in_millis() / 1000;
       Ok((
         block_number,
         CanonicalEvents { time, set_keys_events, slash_report_events, batch_events, burn_events },
@@ -106,24 +124,20 @@ impl<D: Db> RangeProcessor for CanonicalEventStream<D> {
     let mut txn = self.db.txn();
 
     for set_keys in block.set_keys_events {
-      let abi::validator_sets::Event::SetKeys { set, key_pair } = &set_keys else {
+      let abi::validator_sets::Event::SetKeys { set, key_pair } = set_keys else {
         unreachable!("`SetKeys` event wasn't a `SetKeys` event: {set_keys:?}");
       };
       crate::Canonical::send(
         &mut txn,
         set.network,
-        &CoordinatorMessage::SetKeys {
-          serai_time: block.time,
-          session: set.session,
-          key_pair: key_pair.clone(),
-        },
+        &CoordinatorMessage::SetKeys { serai_time: block.time, session: set.session, key_pair },
       );
     }
 
     for slash_report in block.slash_report_events {
       // TODO: This assumes this is always reported on set close but that isn't the case. We
       // need to shim this event if the report isn't published in a timely fashion.
-      let abi::validator_sets::Event::Slashes(reported_slashes) = &slash_report else {
+      let abi::validator_sets::Event::Slashes(reported_slashes) = slash_report else {
         unreachable!("`Slashes` event wasn't a `Slashes` event: {slash_report:?}");
       };
       match reported_slashes {
@@ -155,9 +169,8 @@ impl<D: Db> RangeProcessor for CanonicalEventStream<D> {
           unreachable!("Batch event wasn't a Batch event: {this_batch:?}");
         };
         if network == *batch_network {
-          if batch.is_some() {
-            Err("Serai block had multiple batches for the same network".to_owned())?;
-          }
+          // Consensus invariant, should never happen
+          assert!(batch.is_none(), "Serai block had multiple batches for the same network");
           batch =
             Some(ExecutedBatch {
               id: *id,
@@ -195,11 +208,13 @@ impl<D: Db> RangeProcessor for CanonicalEventStream<D> {
         }
       }
 
-      crate::Canonical::send(
-        &mut txn,
-        network,
-        &CoordinatorMessage::Block { serai_block_number: block_number, batch, burns },
-      );
+      if batch.is_some() || !burns.is_empty() {
+        crate::Canonical::send(
+          &mut txn,
+          network,
+          &CoordinatorMessage::Block { serai_block_number: block_number, batch, burns },
+        );
+      }
     }
 
     ScanCanonicalBlocksFrom::set(&mut txn, &(block_number + 1));

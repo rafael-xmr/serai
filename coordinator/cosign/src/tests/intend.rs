@@ -7,6 +7,8 @@ struct IntendTestStruct {
   db: MemDb,
 }
 
+impl_serai_task_test_struct!(IntendTestStruct);
+
 impl IntoTask for IntendTestStruct {
   type Task = CosignIntendTask<MemDb>;
 
@@ -15,11 +17,7 @@ impl IntoTask for IntendTestStruct {
   }
 }
 
-/// Create a [`SeraiShimRpc`] and a [`IntendTestStruct`] connected to its Serai RPC.
-async fn setup_mock_test() -> (SeraiShimRpc, IntendTestStruct) {
-  let (shim, serai) = setup_shim_serai().await;
-  (shim, IntendTestStruct { serai, db: MemDb::new() })
-}
+impl IntoShimSerai for IntendTestStruct {}
 
 /// Verify all of intend's post-run DB invariants by replaying events from the Serai node.
 async fn verify_db_invariants(db: &MemDb, serai: &Serai, num_blocks: usize) {
@@ -182,7 +180,7 @@ mod errors {
   #[tokio::test]
   #[should_panic(expected = "node's block #2 doesn't build upon the block #1 prior indexed")]
   async fn panics_if_chain_is_not_linear() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     shim.make_block(0, vec![]).await;
     shim.make_block(1, vec![]).await;
@@ -195,7 +193,7 @@ mod errors {
   #[tokio::test]
   #[should_panic(expected = "couldn't get block #0 which should've been finalized")]
   async fn panics_if_block_not_found() {
-    let (_shim, task_test) = setup_mock_test().await;
+    let (_shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     // No blocks yet, fails because serai.latest_finalized_block_number() defaults to 0
     // even without block 0 existing yet, so it fails when getting block 0
@@ -206,7 +204,7 @@ mod errors {
   #[tokio::test]
   #[should_panic(expected = "couldn't get block #2 which should've been finalized")]
   async fn panics_if_later_block_not_found() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     shim.make_block(0, vec![]).await;
     shim.make_block(1, vec![]).await;
@@ -219,7 +217,7 @@ mod errors {
 
   #[tokio::test]
   async fn handles_rpc_error_on_block_fetch() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     shim.make_block(0, vec![]).await;
     shim.make_block(1, vec![]).await;
@@ -240,11 +238,11 @@ mod errors {
 
   #[tokio::test]
   async fn handles_rpc_error_on_events_fetch() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     shim.make_block(0, vec![]).await;
     shim.make_block(1, vec![]).await;
-    let block2_hash = shim.make_block(2, vec![]).await;
+    let block2_hash = shim.make_block(2, vec![]).await.0;
     shim.set_block_hash_error("blockchain/events", block2_hash, "timeout").await;
 
     let mut task = task_test.task();
@@ -262,7 +260,7 @@ mod errors {
   #[tokio::test]
   #[should_panic(expected = "validator set from Event::SetDecided was empty")]
   async fn errors_if_set_decided_has_empty_validators() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
     shim.make_block(0, vec![]).await;
 
     let empty_set_decided = set_decided_event(
@@ -280,7 +278,7 @@ mod errors {
 
   #[tokio::test]
   async fn handles_rpc_error_on_latest_finalized() {
-    let (shim, task_test) = setup_mock_test().await;
+    let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
     shim.make_block(0, vec![]).await;
     shim.make_block(1, vec![]).await;
@@ -302,7 +300,7 @@ mod errors {
 
 #[tokio::test]
 async fn deallocating_zero_is_a_noop() {
-  let (shim, task_test) = setup_mock_test().await;
+  let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
 
   let network = NetworkId::External(ExternalNetworkId::Bitcoin);
 
@@ -362,7 +360,7 @@ async fn fuzzed_event_processing() {
 
   serai_env::log::info!("Fuzz test: {} blocks, {} validators", num_blocks, fuzzer.validators.len());
 
-  let (shim, task_test) = setup_mock_test().await;
+  let (shim, task_test) = IntendTestStruct::setup_mock_test().await;
   for (i, events) in blocks.into_iter().enumerate() {
     shim.make_block(u64::try_from(i).unwrap(), events).await;
   }

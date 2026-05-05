@@ -4,7 +4,6 @@ use serai_abi::{
     network_id::{ExternalNetworkId, NetworkId},
     validator_sets::{ExternalValidatorSet, Session, ValidatorSet},
   },
-  Event,
 };
 
 use serde::Deserialize;
@@ -199,18 +198,11 @@ pub fn build_rpc_module(state: SharedState) -> Result<RpcModule<SharedState>, Er
       if let Some(err) = state.errors.check_block_hash("blockchain/events", &block_hash) {
         return Err(Error::Internal(err.to_owned()));
       }
-      let events = state.events_by_hash.get(&block_hash).cloned().unwrap_or_else(|| vec![vec![]]);
-      Ok(
-        events
-          .into_iter()
-          .map(|events_per_tx: Vec<Event>| {
-            events_per_tx
-              .into_iter()
-              .map(|event| hex::encode(borsh::to_vec(&event).unwrap()))
-              .collect::<Vec<_>>()
-          })
-          .collect::<Vec<Vec<String>>>(),
-      )
+      let events = state.events_by_hash.get(&block_hash).cloned().unwrap_or_else(Vec::new);
+      Ok(vec![events
+        .into_iter()
+        .map(|event| hex::encode(borsh::to_vec(&event).unwrap()))
+        .collect::<Vec<String>>()])
     })
     .map_err(|e| Error::Internal(e.to_string()))?;
 

@@ -139,7 +139,7 @@ async fn full_stack_fuzzed() {
       event_fuzzer.validators.len(),
     );
 
-    let (shim, serai) = setup_shim_serai().await;
+    let (shim, serai) = serai_shim_rpc::SeraiShimRpc::setup_shim_serai().await;
     for (i, events) in blocks.into_iter().enumerate() {
       shim.make_block(u64::try_from(i).unwrap(), events).await;
     }
@@ -191,7 +191,7 @@ async fn equivocation_halts_protocol() {
       event_fuzzer.validators.len(),
     );
 
-    let (shim, serai) = setup_shim_serai().await;
+    let (shim, serai) = serai_shim_rpc::SeraiShimRpc::setup_shim_serai().await;
     for (i, events) in blocks.into_iter().enumerate() {
       shim.make_block(u64::try_from(i).unwrap(), events).await;
     }
@@ -401,7 +401,7 @@ async fn dos_stall_offline_set() {
       event_fuzzer.validators.len(),
     );
 
-    let (shim, serai) = setup_shim_serai().await;
+    let (shim, serai) = serai_shim_rpc::SeraiShimRpc::setup_shim_serai().await;
     for (i, events) in blocks.into_iter().enumerate() {
       shim.make_block(u64::try_from(i).unwrap(), events).await;
     }

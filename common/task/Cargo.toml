@@ -20,6 +20,9 @@ workspace = true
 log = { version = "0.4", default-features = false, features = ["std"] }
 tokio = { version = "1", default-features = false, features = ["macros", "sync", "time"] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
+serai-client-serai = { path = "../../substrate/client/serai" }
+serai-shim-rpc = { path = "../../tests/shim-rpc" }
+serai-db = { path = "../db" }
 
 [features]
 test-helpers = []
