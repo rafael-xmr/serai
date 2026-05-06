@@ -59,14 +59,17 @@ impl<D: Db> ContinuallyRan for EphemeralEventStream<D> {
 
   fn run_iteration(&mut self) -> impl Send + Future<Output = Result<bool, Self::Error>> {
     async move {
-      let next_block = NextBlock::get(&self.db).unwrap_or(0);
-      let Some(latest_finalized_block) =
-        Cosigning::<D>::latest_cosigned_block_number(&self.db).map_err(|e| format!("{e:?}"))?
+      let Some(latest_cosigned_block_number) =
+        Cosigning::<D>::latest_cosigned_block_number(&self.db)
+          // Errors if Faulted session exists and keeps re-trying this task
+          // protocol will be halted not able to progress
+          .map_err(|e| format!("Error getting latest cosigned block number: {e:?}"))?
       else {
         return Ok(false);
       };
 
-      self.process_range(next_block, latest_finalized_block).await
+      let start_scan_block_number = ScanEphemeralBlocksFrom::get(&self.db).unwrap_or(0);
+      self.process_range(start_scan_block_number, latest_cosigned_block_number).await
     }
   }
 }
@@ -88,27 +91,43 @@ impl<D: Db> RangeProcessor for EphemeralEventStream<D> {
       let block_hash = match block_hash {
         Ok(Some(block_hash)) => block_hash,
         Ok(None) => {
-          panic!("iterating to latest cosigned block but couldn't get cosigned block")
+          panic!(
+            "iterating to latest cosigned block but couldn't get \
+             cosigned block number {block_number}"
+          )
         }
         Err(serai_cosign::Faulted) => return Err("cosigning process faulted".to_owned()),
       };
 
-      let events = serai.events(block_hash).await.map_err(|e| format!("{e}"))?;
-      let embedded_elliptic_curve_keys_events = events
-        .validator_sets()
+      let serai_block = serai
+        .block(block_hash)
+        .await
+        .map_err(|e| format!("RPC error fetching block #{block_hash}: {e}"))?
+        .unwrap_or_else(|| {
+          // If latest_cosigned_block_number returned this block number
+          // as cosigned and we iterated to it then it must exist on serai
+          panic!(
+            "Serai node didn't have block #{block_number} which should've been finalized and \
+             cosigned"
+          )
+        });
+
+      let events = serai
+        .events(block_hash)
+        .await
+        .map_err(|e| format!("RPC error fetching block events #{block_hash}: {e}"))?;
+      let validator_sets_events = events.validator_sets();
+      let embedded_elliptic_curve_keys_events = validator_sets_events
         .set_embedded_elliptic_curve_keys_events()
         .cloned()
         .collect::<Vec<_>>();
       let set_decided_events =
-        events.validator_sets().set_decided_events().cloned().collect::<Vec<_>>();
+        validator_sets_events.set_decided_events().cloned().collect::<Vec<_>>();
       let accepted_handover_events =
-        events.validator_sets().accepted_handover_events().cloned().collect::<Vec<_>>();
-      let Some(block) = serai.block(block_hash).await.map_err(|e| format!("{e:?}"))? else {
-        Err(format!("Serai node didn't have cosigned block #{block_number}"))?
-      };
+        validator_sets_events.accepted_handover_events().cloned().collect::<Vec<_>>();
 
       // We use time in seconds, not milliseconds, here
-      let time = block.header.unix_time_in_millis() / 1000;
+      let time = serai_block.header.unix_time_in_millis() / 1000;
       Ok((
         block_number,
         EphemeralEvents {
@@ -131,7 +150,7 @@ impl<D: Db> RangeProcessor for EphemeralEventStream<D> {
         keys,
       } = &event
       else {
-        panic!(
+        unreachable!(
           "{}: {event:?}",
           "`SetEmbeddedEllipticCurveKeys` event wasn't a `SetEmbeddedEllipticCurveKeys` event"
         );
@@ -149,7 +168,7 @@ impl<D: Db> RangeProcessor for EphemeralEventStream<D> {
       let serai_client_serai::abi::validator_sets::Event::SetDecided { set, validators } =
         &set_decided
       else {
-        panic!("`SetDecided` event wasn't a `SetDecided` event: {set_decided:?}");
+        unreachable!("`SetDecided` event wasn't a `SetDecided` event: {set_decided:?}");
       };
 
       // We only coordinate over external networks
@@ -231,7 +250,9 @@ impl<D: Db> RangeProcessor for EphemeralEventStream<D> {
       let serai_client_serai::abi::validator_sets::Event::AcceptedHandover { set } =
         &accepted_handover
       else {
-        panic!("AcceptedHandover event wasn't a AcceptedHandover event: {accepted_handover:?}");
+        unreachable!(
+          "AcceptedHandover event wasn't a AcceptedHandover event: {accepted_handover:?}"
+        );
       };
 
       let Ok(set) = ExternalValidatorSet::try_from(*set) else { continue };
