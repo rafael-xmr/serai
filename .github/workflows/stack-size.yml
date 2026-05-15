@@ -1,4 +1,5 @@
-name: Check Update Default Stack Size
+name: Check `increase_default_stack_size.sh`
+permissions: {}
 
 on:
   push:
@@ -14,12 +15,15 @@ on:
 
 jobs:
   stack_size:
+    name: Check `increase_default_stack_size.sh`
     strategy:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04, macos-26-intel, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+        with:
+          persist-credentials: false
 
       - name: Install Go
         uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # 6.1.0
@@ -28,7 +32,7 @@ jobs:
 
       - name: Monero Daemon Cache
         id: cache-monerod
-        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # 5.0.4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
         with:
           path: monerod
           key: stack-size-monerod
@@ -74,9 +78,9 @@ jobs:
             # macOS also has the benefit of packaging (via MacPorts) `mrsh`,
             # which explicitly attempts to be be exactly POSIX, without any extensions.
             # We first have to install MacPorts, the easiest method being from source.
-            curl -O https://distfiles.macports.org/MacPorts/MacPorts-2.12.4.tar.bz2
-            tar xf MacPorts-2.12.4.tar.bz2
-            cd MacPorts-2.12.4
+            curl -O https://distfiles.macports.org/MacPorts/MacPorts-2.12.5.tar.bz2
+            tar xf MacPorts-2.12.5.tar.bz2
+            cd MacPorts-2.12.5
             ./configure
             make
             sudo make install

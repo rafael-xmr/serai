@@ -95,19 +95,11 @@ impl Default for Signed {
   }
 }
 
-/// The type used for preprocess payloads in the signing protocol.
-pub type Preprocess = [u8; 64];
-/// The type used for share payloads in the signing protocol.
-pub type Share = [u8; 32];
-/// A generic, less constrained type used for either share or preprocess payloads
-/// in the signing protocol.
-pub type GenericSignPayload = Vec<u8>;
-/// One serialized payload per key share held by the sending validator.
-/// The outer Vec has one entry per key share; each inner Vec<u8> is a
-/// serialized preprocess (64 bytes) or share (32 bytes), depending on `round`.
-pub type RoundPayloads = Vec<GenericSignPayload>;
-
-/// The Tributary transaction definition used by Serai
+/// The Tributary transaction definition used by Serai.
+///
+/// Two transactions will be considered equal if equal on every level. This means transactions
+/// which aren't equal may share a hash, due to the hash not binding to the signature, yet the
+/// equality binding to the signature.
 #[derive(Clone, PartialEq, Eq, Debug, BorshSerialize, BorshDeserialize)]
 pub enum Transaction {
   /// A vote to remove a participant for invalid behavior
@@ -128,18 +120,18 @@ pub enum Transaction {
   /// The preprocess to confirm the DKG results on-chain
   DkgConfirmationPreprocess {
     /// The attempt number of this signing protocol
-    attempt: u32,
+    attempt: u64,
     /// The preprocess
-    preprocess: Preprocess,
+    preprocess: [u8; 64],
     /// The transaction's signer and signature
     signed: Signed,
   },
   /// The signature share to confirm the DKG results on-chain
   DkgConfirmationShare {
     /// The attempt number of this signing protocol
-    attempt: u32,
+    attempt: u64,
     /// The signature share
-    share: Share,
+    share: [u8; 32],
     /// The transaction's signer and signature
     signed: Signed,
   },
@@ -219,15 +211,14 @@ pub enum Transaction {
     /// The ID of the object being signed
     id: VariantSignId,
     /// The attempt number of this signing protocol
-    attempt: u32,
+    attempt: u64,
     /// The round this data is for, within the signing protocol
     round: SigningProtocolRound,
     /// The data itself
     ///
     /// There will be `n` blobs of data where `n` is the amount of key shares the validator sending
-    /// this transaction has, and each blob is a serialized preprocess (64 bytes) or share
-    /// (32 bytes), uniform across all entries as determined by `round`.
-    data: RoundPayloads,
+    /// this transaction has.
+    data: Vec<Vec<u8>>,
     /// The transaction's signer and signature
     signed: Signed,
   },

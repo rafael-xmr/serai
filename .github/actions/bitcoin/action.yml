@@ -5,14 +5,14 @@ inputs:
   version:
     description: "Version to download and run"
     required: false
-    default: "30.2"
+    default: "31.0"
 
 runs:
   using: "composite"
   steps:
     - name: Bitcoin Daemon Cache
       id: cache-bitcoind
-      uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # 5.0.4
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # 5.0.5
       with:
         path: bitcoin-${{ inputs.version }}
         key: bitcoind-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
@@ -20,40 +20,42 @@ runs:
     - name: Download and Extract the Bitcoin Daemon
       if: steps.cache-bitcoind.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
       run: |
-        OS=${{ runner.os }}
-        ARCH=${{ runner.arch }}
+        OS="${{ runner.os }}"
+        ARCH="${{ runner.arch }}"
 
-        OS=$(echo "$OS" | tr "[:upper:]" "[:lower:]")
-        ARCH=$(echo "$ARCH" | tr "[:upper:]" "[:lower:]")
+        OS=$(echo "${OS}" | tr "[:upper:]" "[:lower:]")
+        ARCH=$(echo "${ARCH}" | tr "[:upper:]" "[:lower:]")
         EXT="tar.gz"
 
-        if [ "$ARCH" = "x64" ]; then
+        if [ "${ARCH}" = "x64" ]; then
           ARCH="x86_64"
         fi
 
-        if [ "$OS" = "linux" ]; then
+        if [ "${OS}" = "linux" ]; then
           OS="-linux-gnu"
         fi
-        if [ "$OS" = "macos" ]; then
+        if [ "${OS}" = "macos" ]; then
           OS="-apple-darwin"
         fi
-        if [ "$OS" = "windows" ]; then
+        if [ "${OS}" = "windows" ]; then
           ARCH=""
           OS="win64"
           EXT="zip"
         fi
 
-        FILE=bitcoin-${{ inputs.version }}-$ARCH$OS.$EXT
+        FILE="bitcoin-${VERSION}-${ARCH}${OS}.${EXT}"
 
-        curl -L https://bitcoincore.org/bin/bitcoin-core-${{ inputs.version }}/$FILE -o $FILE
+        curl -L "https://bitcoincore.org/bin/bitcoin-core-${VERSION}/${FILE}" -o "${FILE}"
 
         if [ "${{ runner.os }}" = "Windows" ]; then
-          unzip $FILE
+          unzip "${FILE}"
           mv $(find . -name "bitcoind*") .
         else
-          tar -xf $FILE
-          cd bitcoin-${{ inputs.version }}
+          tar -xf "${FILE}"
+          cd "bitcoin-${VERSION}"
           if [ "${{ runner.os }}" = "macOS" ]; then
             sudo mv bin/* /usr/local/bin/
           else
@@ -63,4 +65,4 @@ runs:
 
     - name: Bitcoin Regtest Daemon
       shell: bash
-      run: PATH="$PATH:$(pwd)" ./orchestration/dev/networks/bitcoin/run.sh -txindex -daemon
+      run: PATH="${PATH}:$(pwd)" ./orchestration/dev/networks/bitcoin/run.sh -txindex -daemon

@@ -25,7 +25,8 @@ borsh = { version = "1", default-features = false, features = ["std", "derive", 
 
 ciphersuite = { path = "../../crypto/ciphersuite", default-features = false, features = ["std"] }
 ciphersuite-kp256 = { path = "../../crypto/ciphersuite/kp256", default-features = false, features = ["std"] }
-dkg = { package = "dkg-evrf", path = "../../crypto/dkg/evrf", default-features = false, features = ["std", "secp256k1"] }
+secq256k1 = { path = "../../crypto/secq256k1", default-features = false, features = ["std"] }
+dkg = { package = "dkg-evrf", path = "../../crypto/dkg/evrf", default-features = false, features = ["std"] }
 frost = { package = "modular-frost", path = "../../crypto/frost", default-features = false, features = ["secp256k1"] }
 
 k256 = { version = "^0.13.1", default-features = false, features = ["std"] }
@@ -34,11 +35,11 @@ alloy-core = { version = "1", default-features = false }
 alloy-rlp  = { version = "0.3", default-features = false }
 revm-primitives = { version = "23", default-features = false }
 
-alloy-rpc-types-eth = { version = "1", default-features = false }
-alloy-transport = { version = "1", default-features = false }
+alloy-rpc-types-eth = { version = "2", default-features = false }
+alloy-transport = { version = "2", default-features = false }
 alloy-simple-request-transport = { path = "../../networks/ethereum/alloy-simple-request-transport", default-features = false }
-alloy-rpc-client = { version = "1", default-features = false }
-alloy-provider = { version = "1", default-features = false }
+alloy-rpc-client = { version = "2", default-features = false }
+alloy-provider = { version = "2", default-features = false }
 
 serai-primitives = { path = "../../substrate/primitives", default-features = false, features = ["std"] }
 serai-client-ethereum = { path = "../../substrate/client/ethereum", default-features = false }

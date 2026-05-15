@@ -11,7 +11,6 @@ yanked = "deny"
 ignore = [
   "RUSTSEC-2024-0370", # `proc-macro-error` is unmaintained, in-tree due to Substrate/`litep2p`
   "RUSTSEC-2024-0436", # `paste` is unmaintained
-  "RUSTSEC-2026-0097", # `rand` is unsafe when the `log` feature is enabled, which we check in CI
 ]
 
 [licenses]
@@ -50,6 +49,9 @@ exceptions = [
   { allow = ["AGPL-3.0-only"], name = "serai-ethereum-relayer" },
 
   { allow = ["AGPL-3.0-only"], name = "serai-message-queue" },
+  { allow = ["AGPL-3.0-only"], name = "serai-message-queue-client" },
+  { allow = ["AGPL-3.0-only"], name = "serai-message-queue-server" },
+  { allow = ["AGPL-3.0-only"], name = "serai-message-queue-tests" },
 
   { allow = ["AGPL-3.0-only"], name = "serai-processor-messages" },
   { allow = ["AGPL-3.0-only"], name = "serai-processor-primitives" },
@@ -108,7 +110,6 @@ exceptions = [
 
   { allow = ["AGPL-3.0-only"], name = "serai-shim-rpc" },
   { allow = ["AGPL-3.0-only"], name = "serai-docker-tests" },
-  { allow = ["AGPL-3.0-only"], name = "serai-message-queue-tests" },
   { allow = ["AGPL-3.0-only"], name = "serai-processor-tests" },
   { allow = ["AGPL-3.0-only"], name = "serai-coordinator-tests" },
   { allow = ["AGPL-3.0-only"], name = "serai-substrate-tests" },
@@ -136,6 +137,10 @@ deny = [
   # Introduced an insecure implementation of `borsh` removed with `0.15.1`
   # https://github.com/rust-lang/hashbrown/issues/576
   { name = "hashbrown", version = "=0.15.0" },
+  # Incorrect implementation of cSHAKE
+  # https://github.com/RustCrypto/hashes/pull/834
+  { name = "cshake", version = "<0.1.1" },
+  { name = "sha3", version = ">=0.10.2, <0.10.9" },
 
   # Legacy which _no one_ should use anymore
   { name = "is-terminal", version = "*" },
@@ -143,6 +148,9 @@ deny = [
   # Conflicts with our usage of mimalloc
   # https://github.com/serai-dex/serai/issues/690
   { name = "tikv-jemalloc-sys", version = "*" },
+
+  # https://github.com/libp2p/rust-libp2p/issues/6222
+  { name = "libp2p-floodsub", version = "*" },
 ]
 
 [sources]

@@ -193,7 +193,7 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
   ) -> Option<(SignId, HashMap<Participant, Vec<u8>>)> {
     assert!(
       matches!(topic, Topic::DkgConfirmation { .. }),
-      "accumulate_dkg_confirmation called with non-DkgConfirmation topic: {topic:?}"
+      "`accumulate_dkg_confirmation` called with non-`DkgConfirmation` topic: {topic:?}"
     );
     match TributaryDb::accumulate::<D>(
       self.tributary_txn,
@@ -458,7 +458,9 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
                 slash_report.push(Slash::Points(points));
               }
             }
-            assert!(slash_report.len() <= f);
+            assert!(
+              slash_report.iter().filter(|points| !matches!(points, Slash::Points(0))).count() <= f
+            );
 
             // Recognize the topic for signing the slash report
             TributaryDb::recognize_topic(
@@ -597,6 +599,8 @@ pub struct ScanTributaryTask<TD: Db, P: P2p> {
 
 impl<TD: Db, P: P2p> ScanTributaryTask<TD, P> {
   /// Create a new instance of this task.
+  ///
+  /// This will panic if the Tributary read does not correspond to the set.
   pub fn new(
     tributary_db: TD,
     set: NewSetInformation,
@@ -661,7 +665,7 @@ impl<TD: Db, P: P2p> ContinuallyRan for ScanTributaryTask<TD, P> {
   }
 }
 
-/// Create the Transaction::SlashReport to publish per the local view.
+/// Create the `Transaction::SlashReport` to publish per the local view.
 pub fn slash_report_transaction(getter: &impl Get, set: &NewSetInformation) -> Transaction {
   let mut slash_points = Vec::with_capacity(set.tributary_validators.len());
   for validator in set.tributary_validators.validators.iter() {

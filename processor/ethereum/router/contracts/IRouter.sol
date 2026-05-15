@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.29;
+// slither-disable-next-line pragma // Checked in CI
+pragma solidity ^0.8.34;
 
 /// @title Serai Router (without functions overriden by selector collisions)
 /// @author Luke Parker <lukeparker@serai.exchange>
@@ -40,7 +41,8 @@ interface IRouterWithoutCollisions {
   );
 
   /// @notice Emitted when `escapeHatch` is invoked
-  /// @param escapeTo The address to escape to
+  /// @param nonce The nonce consumed to declare the escape hatch
+  /// @param escapeTo The address escaped to
   event EscapeHatch(uint256 indexed nonce, address indexed escapeTo);
 
   /// @notice Emitted when coins escape through the escape hatch
@@ -84,8 +86,6 @@ interface IRouterWithoutCollisions {
    * @param instruction The encoded `RefundableInInstruction` for Serai to associate with this
    *  transfer in
    */
-  // Re-entrancy doesn't bork this function
-  // slither-disable-next-line reentrancy-events
   function inInstruction(address coin, uint256 amount, bytes memory instruction) external payable;
 
   /// @notice Execute some arbitrary code within a secure sandbox
@@ -170,7 +170,6 @@ interface IRouter is IRouterWithoutCollisions {
    *   (proving signatures can be made by the key in question and verified via our Schnorr
    *   contract).
    */
-  // @param signature The signature by the current key authorizing this update
   /// @param signature The signature by the current key authorizing this update
   /// @param nextSeraiKeyVar The key to update to, once it confirms the update
   function updateSeraiKey(Signature calldata signature, bytes32 nextSeraiKeyVar) external;

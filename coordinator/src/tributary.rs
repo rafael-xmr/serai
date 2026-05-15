@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use zeroize::Zeroizing;
 use rand_core::OsRng;
-use blake2::{digest::typenum::U32, Digest as _, Blake2s};
 use ciphersuite::*;
 use dalek_ff_group::Ristretto;
 
@@ -19,7 +18,7 @@ use tributary_sdk::{
 
 use serai_task::{Task, TaskHandle, DoesNotError, ContinuallyRan};
 
-use message_queue::{Service, Metadata, client::MessageQueue};
+use message_queue::{Service, Metadata, Client as MessageQueue};
 
 use serai_cosign::{Faulted, CosignIntent, Cosigning};
 use serai_coordinator_substrate::{NewSetInformation, SignSlashReport};
@@ -498,8 +497,7 @@ pub(crate) async fn spawn_tributary<P: P2p>(
     return;
   }
 
-  let genesis =
-    <[u8; 32]>::from(Blake2s::<U32>::digest(borsh::to_vec(&(set.serai_block, set.set)).unwrap()));
+  let genesis = set.tributary_genesis();
 
   // Since the Serai block will be finalized, then cosigned, before we handle this, this time will
   // be a couple of minutes stale. While the Tributary will still function with a start time in the

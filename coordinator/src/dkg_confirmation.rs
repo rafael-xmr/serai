@@ -109,9 +109,9 @@ fn handle_frost_error<T>(result: Result<T, FrostError>) -> Result<T, Participant
 
 #[rustfmt::skip]
 enum Signer {
-  Preprocess { attempt: u32, seed: CachedPreprocess, preprocess: [u8; 64] },
+  Preprocess { attempt: u64, seed: CachedPreprocess, preprocess: [u8; 64] },
   Share {
-    attempt: u32,
+    attempt: u64,
     musig_validators: Vec<AuxiliaryKeyAddress>,
     share: [u8; 32],
     machine: Box<AlgorithmSignatureMachine<Ristretto, Schnorrkel>>,
@@ -152,7 +152,7 @@ impl<CD: DbTrait, TD: DbTrait> ConfirmDkgTask<CD, TD> {
   fn preprocess(
     db: &mut CD,
     set: ExternalValidatorSet,
-    attempt: u32,
+    attempt: u64,
     private_serai_auxiliary_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
     signer: &mut Option<Signer>,
   ) {

@@ -41,6 +41,9 @@ members = [
   "networks/ethereum/relayer",
 
   "message-queue",
+  "message-queue/client",
+  "message-queue/server",
+  "message-queue/tests",
 
   "processor/messages",
 
@@ -107,7 +110,6 @@ members = [
 
   "tests/shim-rpc",
   "tests/docker",
-  "tests/message-queue",
   # TODO "tests/processor",
   # TODO "tests/coordinator",
   "tests/substrate",
@@ -234,9 +236,9 @@ aurora-engine-modexp = { path = "patches/ethereum/aurora-engine-modexp" }
 nonzero_ext = { path = "patches/nonzero_ext" }
 
 # `hickory-resolver` uses `moka`, which is obscene with LLM use and frequently has critical bugs
-# This is a version patched to use `lru-slab` for its LRU cache instead
-hickory-proto = { git = "https://github.com/kayabaNerve/hickory-dns", rev = "265df12bc084df83f67733ab99b9fb17ad48bf7a" }
-hickory-resolver = { git = "https://github.com/kayabaNerve/hickory-dns", rev = "265df12bc084df83f67733ab99b9fb17ad48bf7a" }
+# This is a version patched to use `lru-slab` for its LRU cache instead, and some other misc fixes backported
+hickory-proto = { git = "https://github.com/kayabaNerve/hickory-dns", rev = "b64f5bff16cac072c34c274ff8f943d1bf5337f7" }
+hickory-resolver = { git = "https://github.com/kayabaNerve/hickory-dns", rev = "b64f5bff16cac072c34c274ff8f943d1bf5337f7" }
 
 # Patch to include `FromUniformBytes<64>` over `Scalar`
 k256 = { git = "https://github.com/kayabaNerve/elliptic-curves", rev = "8293be3f9855eea0936523a9b100f1f69261ea4b" }
@@ -337,3 +339,16 @@ suspicious_xor_used_as_pow = "warn"
 unnecessary_self_imports = "warn"
 unused_trait_names = "warn"
 wildcard_enum_match_arm = "warn"
+
+# TODO: `-Zcargo-lints`: [workspace.lints.cargo]
+# TODO: `-Zcargo-lints`: missing_lints_inheritance = "warn"
+# TODO: `-Zcargo-lints`: non_kebab_case_bins = "warn"
+# TODO: `-Zcargo-lints`: non_kebab_case_features = "warn"
+# TODO: `-Zcargo-lints`: non_kebab_case_packages = "warn"
+# TODO: `-Zcargo-lints`: redundant_homepage = "warn"
+# TODO: `-Zcargo-lints`: redundant_readme = "warn"
+# TODO: `-Zcargo-lints`: unknown_lints = "warn"
+# TODO: `-Zcargo-lints`: unused_dependencies = "warn"
+# TODO: `-Zcargo-lints`: unused_workspace_dependencies = "warn"
+# TODO: `-Zcargo-lints`: unused_workspace_package_fields = "warn"
+# TODO: Lint for implicit features?

@@ -1,70 +1,57 @@
 use rand::{Rng as _, RngCore as _, rngs::OsRng};
-use messages::sign::{SignId, VariantSignId};
 
-use serai_db::{Db as _, DbTxn, MemDb};
 use serai_primitives::{
   address::SeraiAddress,
-  validator_sets::ExternalValidatorSet,
+  validator_sets::{ExternalValidatorSet, KeyShares},
   test_helpers::{
-    random_bytes_32, random_bytes_64, random_serai_address, random_block_number,
-    default_test_validator_set, random_validator_set, random_vec_u8, random_block_hash,
+    random_bytes, random_block_hash, random_serai_address, random_validator_set, random_vec_u8,
   },
 };
 
+use messages::sign::{SignId, VariantSignId};
+use serai_db::{Db as _, DbTxn, MemDb};
 use crate::{
+  transaction::SigningProtocolRound,
   db::{*, ProcessorMessages, DkgConfirmationMessages},
   tests::*,
-  transaction::{RoundPayloads, Preprocess, Share, SigningProtocolRound},
 };
 
-/// One of each topic kind, and attempts: at 0, a random attempt, and u32::MAX.
+/// One of each topic kind, and attempts: at 0 and a random attempt.
 fn all_topics_and_attempts() -> Vec<Topic> {
-  let random_attempt = OsRng.gen_range(1u32 .. u32::MAX);
+  let random_attempt = OsRng.gen_range(1u64 .. u64::MAX);
   vec![
     // RemoveParticipant
     Topic::RemoveParticipant { participant: random_serai_address(&mut OsRng) },
     // DkgConfirmation Preprocess
     Topic::DkgConfirmation { attempt: 0, round: SigningProtocolRound::Preprocess },
     Topic::DkgConfirmation { attempt: random_attempt, round: SigningProtocolRound::Preprocess },
-    Topic::DkgConfirmation { attempt: u32::MAX, round: SigningProtocolRound::Preprocess },
     // DkgConfirmation Share
     Topic::DkgConfirmation { attempt: 0, round: SigningProtocolRound::Share },
     Topic::DkgConfirmation { attempt: random_attempt, round: SigningProtocolRound::Share },
-    Topic::DkgConfirmation { attempt: u32::MAX, round: SigningProtocolRound::Share },
     // SlashReport
     Topic::SlashReport,
     // Sign Preprocess
     Topic::Sign {
-      id: random_transaction_id(),
+      id: random_variant_sign_id(),
       attempt: 0,
       round: SigningProtocolRound::Preprocess,
     },
     Topic::Sign {
-      id: random_transaction_id(),
+      id: random_variant_sign_id(),
       attempt: random_attempt,
-      round: SigningProtocolRound::Preprocess,
-    },
-    Topic::Sign {
-      id: random_transaction_id(),
-      attempt: u32::MAX,
       round: SigningProtocolRound::Preprocess,
     },
     // Sign Share
-    Topic::Sign { id: random_transaction_id(), attempt: 0, round: SigningProtocolRound::Share },
+    Topic::Sign { id: random_variant_sign_id(), attempt: 0, round: SigningProtocolRound::Share },
     Topic::Sign {
-      id: random_transaction_id(),
+      id: random_variant_sign_id(),
       attempt: random_attempt,
-      round: SigningProtocolRound::Share,
-    },
-    Topic::Sign {
-      id: random_transaction_id(),
-      attempt: u32::MAX,
       round: SigningProtocolRound::Share,
     },
   ]
 }
 
-/// Share-round topics only, with attempts: at 0, random, and u32::MAX.
+/// Share-round topics only, with attempts: at 0 and random.
 fn all_share_topics_and_attempts() -> Vec<Topic> {
   all_topics_and_attempts()
     .into_iter()
@@ -78,7 +65,7 @@ fn all_share_topics_and_attempts() -> Vec<Topic> {
     .collect()
 }
 
-/// Preprocess-round topics only, with attempts: at 0, random, and u32::MAX.
+/// Preprocess-round topics only, with attempts: at 0 and random.
 fn all_preprocess_topics_and_attempts() -> Vec<Topic> {
   all_topics_and_attempts()
     .into_iter()
@@ -92,7 +79,7 @@ fn all_preprocess_topics_and_attempts() -> Vec<Topic> {
     .collect()
 }
 
-type NoEachFn = fn(usize, &DataSet<Share>);
+type NoEachFn = fn(usize, &DataSet<[u8; 32]>);
 
 /// Cross threshold by accumulating from all validators, returning the final result.
 #[expect(clippy::too_many_arguments)]
@@ -124,7 +111,7 @@ where
       1,
       &data,
     );
-    if let Some(ref mut f) = on_each {
+    if let Some(f) = &mut on_each {
       f(i, &result);
     }
   }
@@ -132,32 +119,16 @@ where
   result
 }
 
-mod required_participation_tests {
-  use super::*;
-
-  #[test]
-  fn passes() {
-    assert_eq!(required_participation(0), 1);
-
-    // No panics
-    {
-      let random_n = OsRng.gen_range(0 .. u16::MAX / 2);
-      let _ = required_participation(random_n);
-      let _ = required_participation(u16::MAX / 2);
-    }
-  }
-
-  #[test]
-  fn panics_on_overflow() {
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-      required_participation(u16::MAX);
-    }));
-    assert!(res.is_err());
-
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-      required_participation((u16::MAX / 2) + 1);
-    }));
-    assert!(res.is_err());
+#[test]
+fn required_participation() {
+  assert_eq!(Topic::SlashReport.required_participation(0), 1);
+  assert_eq!(Topic::SlashReport.required_participation(u16::MAX), 43691);
+  for _ in 0 .. 128 {
+    #[expect(clippy::as_conversions, clippy::cast_possible_truncation)]
+    let validators = OsRng.next_u64() as u16;
+    let required = Topic::SlashReport.required_participation(validators);
+    assert!(((2 * (validators - required)) + 1) <= required);
+    assert!((required - ((2 * (validators - required)) + 1)) <= 2);
   }
 }
 
@@ -197,21 +168,23 @@ mod topic {
         Topic::DkgConfirmation { attempt, round } => match round {
           SigningProtocolRound::Preprocess => assert_eq!(
             topic.reattempt_topic(),
-            attempt.checked_add(1).map(|next| {
-              (
-                next,
-                Topic::DkgConfirmation { attempt: next, round: SigningProtocolRound::Preprocess },
-              )
-            })
+            Some((
+              attempt + 1,
+              Topic::DkgConfirmation {
+                attempt: attempt + 1,
+                round: SigningProtocolRound::Preprocess
+              },
+            ))
           ),
           SigningProtocolRound::Share => assert_eq!(topic.reattempt_topic(), None),
         },
         Topic::Sign { id, attempt, round } => match round {
           SigningProtocolRound::Preprocess => assert_eq!(
             topic.reattempt_topic(),
-            attempt.checked_add(1).map(|next| {
-              (next, Topic::Sign { id, attempt: next, round: SigningProtocolRound::Preprocess })
-            })
+            Some((
+              attempt + 1,
+              Topic::Sign { id, attempt: attempt + 1, round: SigningProtocolRound::Preprocess }
+            ))
           ),
           SigningProtocolRound::Share => assert_eq!(topic.reattempt_topic(), None),
         },
@@ -353,16 +326,15 @@ mod tributary_db {
     let mut db = MemDb::new();
     let set = random_validator_set(&mut OsRng);
     let block_hash1 = random_block_hash(&mut OsRng);
-    let block_number1 = random_block_number(&mut OsRng);
+    let block_number1 = OsRng.next_u64();
 
-    let expected_topic =
-      expected_initially_recognized_sign_topic(VariantSignId::Cosign(block_number1));
+    let expected_topic = initial_sign_topic(VariantSignId::Cosign(block_number1));
 
     // Recognizes topic
     {
       let mut txn = db.txn();
       TributaryDb::start_cosigning(&mut txn, set, block_hash1, block_number1);
-      assert_cosigning_invariants(&mut txn, set, block_hash1, block_number1);
+      assert_start_cosigning_invariants(&mut txn, set, block_hash1, block_number1);
       txn.commit();
     }
 
@@ -373,7 +345,7 @@ mod tributary_db {
 
       let retry = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let block_hash2 = random_block_hash(&mut OsRng);
-        let block_number2 = random_block_number(&mut OsRng);
+        let block_number2 = OsRng.next_u64();
         TributaryDb::start_cosigning(&mut txn, set, block_hash2, block_number2);
       }));
 
@@ -381,8 +353,6 @@ mod tributary_db {
 
       // Previous topic still recognized
       assert!(TributaryDb::recognized(&txn, set, expected_topic));
-
-      txn.commit();
     }
 
     // Finish cosigning
@@ -401,7 +371,7 @@ mod tributary_db {
     {
       let mut txn = db.txn();
       let block_hash2 = random_block_hash(&mut OsRng);
-      let block_number2 = random_block_number(&mut OsRng);
+      let block_number2 = OsRng.next_u64();
 
       TributaryDb::start_cosigning(&mut txn, set, block_hash2, block_number2);
       assert_eq!(ActivelyCosigning::get(&txn, set), Some(block_hash2));
@@ -413,7 +383,7 @@ mod tributary_db {
       assert!(TributaryDb::recognized(
         &txn,
         set,
-        expected_initially_recognized_sign_topic(VariantSignId::Cosign(block_number2))
+        initial_sign_topic(VariantSignId::Cosign(block_number2))
       ));
       // Previous topic also remains recognized
       assert!(TributaryDb::recognized(&txn, set, expected_topic));
@@ -424,7 +394,7 @@ mod tributary_db {
 
   #[test]
   fn start_of_block() {
-    let _ = env_logger::try_init();
+    serai_env::init_logger();
     let set = random_validator_set(&mut OsRng);
 
     let reattemptable_topics: Vec<Topic> = all_topics_and_attempts()
@@ -443,7 +413,7 @@ mod tributary_db {
         // Fresh DB per topic so recognized state doesn't leak between iterations
         let mut db = MemDb::new();
         let mut txn = db.txn();
-        let block_number = random_block_number(&mut OsRng);
+        let block_number = OsRng.next_u64();
 
         // Randomly select which reattempt topics are queued for this block
         let reattempts: Vec<Topic> =
@@ -514,7 +484,7 @@ mod tributary_db {
     fn default_accumulate_setup(
     ) -> (ExternalValidatorSet, SeraiAddress, Vec<SeraiAddress>, u16, u16) {
       let set = random_validator_set(&mut OsRng);
-      let (_, _, _, validators, _, total_weight) = setup_test_validators_and_weights_with_keys();
+      let (_, _, validators, _, total_weight) = setup_test_validators_and_weights_with_keys();
       let validator = validators[0];
       let validator_weight = 1;
       (set, validator, validators, total_weight, validator_weight)
@@ -539,16 +509,16 @@ mod tributary_db {
           // Do not store any preceding Preprocess data
           // Validator should be slashed with reason:
           // "participated in topic without participating in prior"
-          let result = TributaryDb::accumulate::<Share>(
+          let result = TributaryDb::accumulate::<[u8; 32]>(
             &mut txn,
             set,
             &validators,
             total_weight,
-            random_block_number(&mut OsRng),
+            OsRng.next_u64(),
             share_topic,
             validator,
             validator_weight,
-            &random_bytes_32(&mut OsRng),
+            &random_bytes(&mut OsRng),
           );
           txn.commit();
 
@@ -574,27 +544,27 @@ mod tributary_db {
             TributaryDb::recognize_topic(&mut txn, set, share_topic);
           }
 
-          // Store preceding preprocess data (Preprocess)
-          Accumulated::<Preprocess>::set(
+          // Store preceding preprocess data
+          Accumulated::<[u8; 64]>::set(
             &mut txn,
             set,
             share_topic.preceding_topic().unwrap(),
             validator,
-            &random_bytes_64(&mut OsRng),
+            &random_bytes(&mut OsRng),
           );
 
-          // Accumulate a share (Share)
+          // Accumulate a share
           // The preceding check should find the key despite the type mismatch and NOT slash.
-          let result = TributaryDb::accumulate::<Share>(
+          let result = TributaryDb::accumulate::<[u8; 32]>(
             &mut txn,
             set,
             &validators,
             total_weight,
-            random_block_number(&mut OsRng),
+            OsRng.next_u64(),
             share_topic,
             validator,
             validator_weight,
-            &random_bytes_32(&mut OsRng),
+            &random_bytes(&mut OsRng),
           );
           txn.commit();
 
@@ -603,10 +573,10 @@ mod tributary_db {
           // Below threshold (1 of 3) so result is None but data is stored
           assert!(matches!(result, DataSet::None));
           // Confirm data is stored
-          assert!(Accumulated::<Share>::get(&db, set, share_topic, validator).is_some());
+          assert!(Accumulated::<[u8; 32]>::get(&db, set, share_topic, validator).is_some());
         }
 
-        // Same types: stores type of RoundPayloads for both Preprocess and Share.
+        // Same types: stores type of Vec<Vec<u8>> for both Preprocess and Share.
         // Only topics where the preprocess data survives after threshold
         // (reattempt exists).
         for share_topic in all_share_topics_and_attempts()
@@ -631,20 +601,20 @@ mod tributary_db {
             set,
             &validators,
             total_weight,
-            random_block_number(&mut OsRng),
+            OsRng.next_u64(),
             preprocess_topic,
-            |_| vec![random_vec_u8(&mut OsRng)],
-            None::<fn(usize, &DataSet<RoundPayloads>)>,
+            |_| vec![random_vec_u8(&mut OsRng, 0 ..= 128)],
+            None::<fn(usize, &DataSet<Vec<Vec<u8>>>)>,
           );
 
-          // Accumulate a share with the same RoundPayloads type
-          let share_data: RoundPayloads = vec![random_vec_u8(&mut OsRng)];
-          let result = TributaryDb::accumulate::<RoundPayloads>(
+          // Accumulate a share with the same Vec<Vec<u8>> type
+          let share_data: Vec<Vec<u8>> = vec![random_vec_u8(&mut OsRng, 0 ..= 128)];
+          let result = TributaryDb::accumulate::<Vec<Vec<u8>>>(
             &mut txn,
             set,
             &validators,
             total_weight,
-            random_block_number(&mut OsRng),
+            OsRng.next_u64(),
             share_topic,
             validator,
             validator_weight,
@@ -658,7 +628,7 @@ mod tributary_db {
           );
           assert!(matches!(result, DataSet::None), "below threshold (1 of 3)");
           assert_eq!(
-            Accumulated::<RoundPayloads>::get(&db, set, share_topic, validator),
+            Accumulated::<Vec<Vec<u8>>>::get(&db, set, share_topic, validator),
             Some(share_data)
           );
         }
@@ -674,7 +644,7 @@ mod tributary_db {
           let (set, _validator, validators, total_weight, _validator_weight) =
             default_accumulate_setup();
           let mut db = MemDb::new();
-          let block_number = random_block_number(&mut OsRng);
+          let block_number = OsRng.next_u64();
 
           {
             let mut txn = db.txn();
@@ -690,7 +660,7 @@ mod tributary_db {
               block_number,
               topic,
               |i| [u8::try_from(i).unwrap(); 32],
-              Some(|i: usize, result: &DataSet<Share>| {
+              Some(|i: usize, result: &DataSet<[u8; 32]>| {
                 if i < 2 {
                   assert!(matches!(result, DataSet::None));
                 } else {
@@ -712,12 +682,12 @@ mod tributary_db {
             assert!(!TributaryDb::is_fatally_slashed(&db, set, *v));
             if has_reattempt {
               assert!(
-                Accumulated::<Share>::get(&db, set, topic, *v).is_some(),
+                Accumulated::<[u8; 32]>::get(&db, set, topic, *v).is_some(),
                 "data should be preserved when reattempt exists: {topic:?}"
               );
             } else {
               assert!(
-                Accumulated::<Share>::get(&db, set, topic, *v).is_none(),
+                Accumulated::<[u8; 32]>::get(&db, set, topic, *v).is_none(),
                 "data should be cleaned up when no reattempt: {topic:?}"
               );
             }
@@ -741,16 +711,16 @@ mod tributary_db {
           let unrelated = Topic::SlashReport;
           {
             let mut txn = db.txn();
-            let result = TributaryDb::accumulate::<Share>(
+            let result = TributaryDb::accumulate::<[u8; 32]>(
               &mut txn,
               set,
               &validators,
               total_weight,
-              random_block_number(&mut OsRng),
+              OsRng.next_u64(),
               unrelated,
               validators[0],
               validator_weight,
-              &random_bytes_32(&mut OsRng),
+              &random_bytes(&mut OsRng),
             );
             assert!(matches!(result, DataSet::None));
             txn.commit();
@@ -759,18 +729,18 @@ mod tributary_db {
           assert_eq!(AccumulatedWeight::get(&db, set, unrelated), Some(validator_weight));
 
           // Accumulating for our topic proceeds (not NOP'd by unrelated weight)
-          let data = random_bytes_32(&mut OsRng);
+          let data = random_bytes(&mut OsRng);
           {
             let mut txn = db.txn();
             if topic.requires_recognition() {
               TributaryDb::recognize_topic(&mut txn, set, topic);
             }
-            let result = TributaryDb::accumulate::<Share>(
+            let result = TributaryDb::accumulate::<[u8; 32]>(
               &mut txn,
               set,
               &validators,
               total_weight,
-              random_block_number(&mut OsRng),
+              OsRng.next_u64(),
               topic,
               validators[1],
               validator_weight,
@@ -781,7 +751,7 @@ mod tributary_db {
           }
 
           // Data was stored (not NOP'd)
-          assert_eq!(Accumulated::<Share>::get(&db, set, topic, validators[1]), Some(data));
+          assert_eq!(Accumulated::<[u8; 32]>::get(&db, set, topic, validators[1]), Some(data));
           assert_eq!(AccumulatedWeight::get(&db, set, topic), Some(validator_weight));
         }
       }
@@ -821,7 +791,7 @@ mod tributary_db {
           if topic.reattempt_topic().is_some() {
             for (i, v) in validators.iter().enumerate() {
               assert_eq!(
-                Accumulated::<Share>::get(&db, set, topic, *v),
+                Accumulated::<[u8; 32]>::get(&db, set, topic, *v),
                 Some([u8::try_from(i).unwrap(); 32]),
                 "data should be preserved when reattempt exists: {topic:?}"
               );
@@ -833,7 +803,7 @@ mod tributary_db {
             );
             for v in &validators {
               assert!(
-                Accumulated::<Share>::get(&db, set, topic, *v).is_none(),
+                Accumulated::<[u8; 32]>::get(&db, set, topic, *v).is_none(),
                 "data should be cleaned up when no reattempt: {topic:?}"
               );
             }
@@ -848,10 +818,10 @@ mod tributary_db {
         let (set, _validator, validators, total_weight, _validator_weight) =
           default_accumulate_setup();
 
-        // attempt just below u32::MAX so reattempt_topic() returns Some(u32::MAX)
+        // attempt just below u64::MAX so reattempt_topic() returns Some(u64::MAX)
         let topic =
-          Topic::DkgConfirmation { attempt: u32::MAX - 1, round: SigningProtocolRound::Preprocess };
-        assert_eq!(topic.reattempt_topic().unwrap().0, u32::MAX);
+          Topic::DkgConfirmation { attempt: u64::MAX - 1, round: SigningProtocolRound::Preprocess };
+        assert_eq!(topic.reattempt_topic().unwrap().0, u64::MAX);
 
         // block_number near u64::MAX forces checked_add to overflow
         let block_number = u64::MAX - 1;
@@ -895,7 +865,7 @@ mod tributary_db {
               set,
               &validators,
               total_weight,
-              random_block_number(&mut OsRng),
+              OsRng.next_u64(),
               topic,
               |i| [u8::try_from(i).unwrap(); 32],
               None::<NoEachFn>,
@@ -903,6 +873,7 @@ mod tributary_db {
             txn.commit();
           }
 
+          assert!(TributaryDb::recognized(&db, set, succeeding));
           assert_eq!(
             AccumulatedWeight::get(&db, set, succeeding),
             Some(0),
@@ -934,11 +905,11 @@ mod tributary_db {
           set,
           &validators,
           total_weight,
-          random_block_number(&mut OsRng),
+          OsRng.next_u64(),
           topic,
           validator,
           validator_weight,
-          &random_vec_u8(&mut OsRng),
+          &random_vec_u8(&mut OsRng, 0 ..= 128),
         );
 
         // Second call with same (validator, topic) should panic
@@ -947,11 +918,11 @@ mod tributary_db {
           set,
           &validators,
           total_weight,
-          random_block_number(&mut OsRng),
+          OsRng.next_u64(),
           topic,
           validator,
           validator_weight,
-          &random_vec_u8(&mut OsRng),
+          &random_vec_u8(&mut OsRng, 0 ..= 128),
         );
       }
 
@@ -962,11 +933,12 @@ mod tributary_db {
       fn double_call_after_threshold_with_reattempt_panics() {
         // DkgConfirmation Preprocess has a reattempt topic, so entries survive post-threshold
         let topic = Topic::DkgConfirmation { attempt: 0, round: SigningProtocolRound::Preprocess };
+        assert!(topic.reattempt_topic().is_some());
         let (set, validator, validators, total_weight, validator_weight) =
           default_accumulate_setup();
         let mut db = MemDb::new();
         let mut txn = db.txn();
-        let block_number = random_block_number(&mut OsRng);
+        let block_number = OsRng.next_u64();
 
         TributaryDb::recognize_topic(&mut txn, set, topic);
 
@@ -991,13 +963,22 @@ mod tributary_db {
           topic,
           validator,
           validator_weight,
-          &random_vec_u8(&mut OsRng),
+          &random_vec_u8(&mut OsRng, 0 ..= 128),
         );
       }
 
       /// After threshold without a reattempt topic, Accumulated entries are
       /// cleaned up. The duplicate call does not hit the assertion (key is gone)
       /// and instead falls through to the weight >= threshold NOP.
+      /*
+        TODO: This test is unclear.
+
+        It should test an unreachable case (double accumulate), which is why that is allowed to
+        generally panic. This test shows the literal behavior where if the topic's data is pruned,
+        then those asserts for an unreachable case disappear, which is fine. Why are we testing
+        this behavior though? It should be unreachable and unobservable. This is more akin to a bug
+        report that sanity checks disappear than functionality we want to assert the behavior of.
+      */
       #[test]
       fn double_call_after_threshold_without_reattempt_is_nop() {
         // RemoveParticipant has no reattempt, so entries are cleaned up post-threshold
@@ -1006,7 +987,7 @@ mod tributary_db {
           default_accumulate_setup();
         let mut db = MemDb::new();
         let mut txn = db.txn();
-        let block_number = random_block_number(&mut OsRng);
+        let block_number = OsRng.next_u64();
 
         accumulate_to_threshold::<Vec<u8>, _, _>(
           &mut txn,
@@ -1032,7 +1013,7 @@ mod tributary_db {
           topic,
           validator,
           validator_weight,
-          &random_vec_u8(&mut OsRng),
+          &random_vec_u8(&mut OsRng, 0 ..= 128),
         );
 
         assert!(matches!(result, DataSet::None), "should be NOP after threshold");
@@ -1068,7 +1049,7 @@ mod tributary_db {
         validator_in_list: bool,
         result: &DataSet<Vec<u8>>,
       ) {
-        let required = required_participation(total_weight);
+        let required = topic.required_participation(total_weight);
         let post_slashed = TributaryDb::is_fatally_slashed(db, set, validator);
         let post_weight = AccumulatedWeight::get(db, set, topic);
 
@@ -1087,7 +1068,7 @@ mod tributary_db {
         let weight_before = pre_weight.unwrap_or(0);
 
         // Slash for participating without completing the preceding topic.
-        if topic.preceding_topic().is_some() && !has_preceding_accumulated {
+        if topic.preceding_topic().is_some() && (!has_preceding_accumulated) {
           assert!(post_slashed, "should be fatally slashed for missing preceding participation");
           assert!(matches!(result, DataSet::None));
           assert_eq!(post_weight, pre_weight, "weight unchanged after preceding slash");
@@ -1129,7 +1110,8 @@ mod tributary_db {
 
           // Reattempt should be queued if topic is reattemptable.
           if let Some((reattempt_attempt, reattempt_topic)) = topic.reattempt_topic() {
-            let blocks_till = u64::from(reattempt_attempt)
+            let blocks_till = reattempt_attempt
+              .min(10)
               .checked_mul(u64::from(BASE_REATTEMPT_DELAY))
               .expect("reattempt delay overflowed u64");
             let recognize_at =
@@ -1226,16 +1208,16 @@ mod tributary_db {
       fn fuzz_accumulate() {
         for _ in 0 .. 1000 {
           let has_initial_weight = OsRng.gen::<bool>();
-          let initial_weight = OsRng.gen_range(0u16 .. u16::MAX);
-          let total_weight = OsRng.gen_range(1u16 .. u16::MAX);
+          let initial_weight = OsRng.gen_range(0u16 .. KeyShares::MAX_PER_SET);
+          let total_weight = OsRng.gen_range(1u16 .. KeyShares::MAX_PER_SET);
 
           let has_next_topic_weight = OsRng.gen::<bool>();
-          let next_topic_initial_weight = OsRng.gen_range(0u16 .. u16::MAX);
+          let next_topic_initial_weight = OsRng.gen_range(0u16 .. KeyShares::MAX_PER_SET);
 
           let has_preceding_topic_accumulated = OsRng.gen::<bool>();
 
           let topic_variant = OsRng.gen_range(0u8 .. 5);
-          let attempt = OsRng.gen_range(0u32 .. 100);
+          let attempt = OsRng.gen_range(0u64 .. 100);
           let round = if OsRng.gen::<bool>() {
             SigningProtocolRound::Preprocess
           } else {
@@ -1243,12 +1225,12 @@ mod tributary_db {
           };
           let cosign_block = OsRng.next_u64();
           let batch_id: [u8; 32] = OsRng.gen();
-          let validator_weight = OsRng.gen_range(1u16 .. u16::MAX);
+          let validator_weight = OsRng.gen_range(1u16 .. KeyShares::MAX_PER_SET);
           let block_number = OsRng.gen_range(1u64 .. u64::MAX);
           let data: Vec<u8> = (0 .. OsRng.gen_range(0usize .. 64)).map(|_| OsRng.gen()).collect();
 
-          let num_validators = OsRng.gen_range(1u16 .. u16::MAX);
-          let cur_validator = OsRng.gen_range(0u16 .. u16::MAX);
+          let num_validators = OsRng.gen_range(1u16 .. u16::from(u8::MAX));
+          let cur_validator = OsRng.gen_range(0u16 .. u16::from(u8::MAX));
           let validator_in_list = OsRng.gen::<bool>();
 
           let topic = match topic_variant % 5 {
@@ -1262,7 +1244,7 @@ mod tributary_db {
           };
 
           let mut db = MemDb::new();
-          let set = default_test_validator_set();
+          let set = random_validator_set(&mut OsRng);
 
           let validators: Vec<SeraiAddress> =
             (0 .. num_validators).map(|_i| random_serai_address(&mut OsRng)).collect();
@@ -1301,50 +1283,36 @@ mod tributary_db {
           let pre_weight = AccumulatedWeight::get(&txn, set, topic);
           let pre_slashed = TributaryDb::is_fatally_slashed(&txn, set, validator);
 
-          let catch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result = TributaryDb::accumulate::<Vec<u8>>(
-              &mut txn,
-              set,
-              &validators,
-              total_weight,
-              block_number,
-              topic,
-              validator,
-              validator_weight,
-              &data,
-            );
+          let result = TributaryDb::accumulate::<Vec<u8>>(
+            &mut txn,
+            set,
+            &validators,
+            total_weight,
+            block_number,
+            topic,
+            validator,
+            validator_weight,
+            &data,
+          );
 
-            txn.commit();
+          txn.commit();
 
-            verify_accumulate_invariants(
-              &db_clone,
-              set,
-              total_weight,
-              block_number,
-              topic,
-              validator,
-              validator_weight,
-              &data,
-              pre_weight,
-              pre_slashed,
-              has_preceding_topic_accumulated,
-              has_next_topic_weight,
-              validator_in_list,
-              &result,
-            );
-          }));
-
-          if let Err(panic) = catch_result {
-            let msg = panic
-              .downcast_ref::<String>()
-              .map(String::as_str)
-              .or_else(|| panic.downcast_ref::<&str>().copied())
-              .unwrap_or("");
-            if msg.contains("overflowed") {
-              continue;
-            }
-            std::panic::resume_unwind(panic);
-          }
+          verify_accumulate_invariants(
+            &db_clone,
+            set,
+            total_weight,
+            block_number,
+            topic,
+            validator,
+            validator_weight,
+            &data,
+            pre_weight,
+            pre_slashed,
+            has_preceding_topic_accumulated,
+            has_next_topic_weight,
+            validator_in_list,
+            &result,
+          );
         }
       }
     }

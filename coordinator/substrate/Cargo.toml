@@ -20,6 +20,7 @@ workspace = true
 borsh = { version = "1", default-features = false, features = ["std", "derive", "de_strict_order"] }
 schnorrkel = { version = "0.11", default-features = false }
 
+blake2 = { version = "0.11.0-rc.5", default-features = false, features = ["alloc"] }
 dkg = { path = "../../crypto/dkg", default-features = false, features = ["std"] }
 ciphersuite = { path = "../../crypto/ciphersuite", default-features = false, features = ["std"] }
 dalek-ff-group = { path = "../../crypto/dalek-ff-group", default-features = false, features = ["alloc"] }

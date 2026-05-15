@@ -55,6 +55,14 @@ pub struct NewSetInformation {
   pub tributary_validators: TributaryValidatorSet,
 }
 
+impl NewSetInformation {
+  /// The hash to use for the genesis of the corresponding Tributary.
+  pub fn tributary_genesis(&self) -> [u8; 32] {
+    // This MUST only hash data completely deterministic to the Substrate blockchain.
+    Blake2b::<U32>::digest(borsh::to_vec(self).unwrap()).into()
+  }
+}
+
 mod _public_db {
   use super::*;
 

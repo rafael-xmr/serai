@@ -11,8 +11,8 @@ use serai_primitives::{BlockHash, validator_sets::ExternalValidatorSet};
 use messages::sign::{VariantSignId, SignId};
 
 use serai_db::*;
-
 use serai_cosign_types::CosignIntent;
+use messages::sign::{VariantSignId, SignId};
 
 use crate::transaction::SigningProtocolRound;
 
@@ -30,7 +30,7 @@ pub enum Topic {
   /// Participation in the signing protocol to confirm the DKG results on Substrate
   DkgConfirmation {
     /// The attempt number this is for
-    attempt: u32,
+    attempt: u64,
     /// The round of the signing protocol
     round: SigningProtocolRound,
   },
@@ -43,7 +43,7 @@ pub enum Topic {
     /// The ID of the signing protocol
     id: VariantSignId,
     /// The attempt number this is for
-    attempt: u32,
+    attempt: u64,
     /// The round of the signing protocol
     round: SigningProtocolRound,
   },
@@ -80,7 +80,7 @@ impl Topic {
   }
 
   // The topic for the re-attempt to schedule
-  pub(crate) fn reattempt_topic(self) -> Option<(u32, Topic)> {
+  pub(crate) fn reattempt_topic(self) -> Option<(u64, Topic)> {
     #[expect(clippy::match_same_arms)]
     match self {
       Topic::RemoveParticipant { .. } => None,
@@ -383,6 +383,13 @@ impl TributaryDb {
   }
   pub(crate) fn recognized(getter: &impl Get, set: ExternalValidatorSet, topic: Topic) -> bool {
     AccumulatedWeight::get(getter, set, topic).is_some()
+  }
+  /// The next topic which required recognition which has now been recognized by this Tributary.
+  pub(crate) fn try_recv_topic_requiring_recognition(
+    txn: &mut impl DbTxn,
+    set: ExternalValidatorSet,
+  ) -> Option<Topic> {
+    RecognizedTopics::try_recv(txn, set)
   }
 
   pub(crate) fn start_of_block(txn: &mut impl DbTxn, set: ExternalValidatorSet, block_number: u64) {
