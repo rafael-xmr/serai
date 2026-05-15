@@ -1,55 +1,16 @@
-use rand_core::{RngCore, CryptoRng};
+use rand_core::OsRng;
 
-use serai_primitives::{network_id::ExternalNetworkId, test_helpers::random_block_hash};
+use serai_primitives::test_helpers::random_keypair;
 
-use crate::{COSIGN_CONTEXT, CosignIntent, Cosign, SignedCosign};
-
-/// Sign a [`Cosign`] with a schnorrkel keypair, producing a [`SignedCosign`].
-pub fn sign_cosign(cosign: Cosign, keypair: &schnorrkel::Keypair) -> SignedCosign {
-  SignedCosign {
-    signature: keypair.sign_simple(COSIGN_CONTEXT, &cosign.signature_message()).to_bytes(),
-    cosign,
-  }
-}
-
-/// Generate a random [`ExternalNetworkId`] for testing.
-pub fn random_external_network_id(rng: &mut (impl RngCore + CryptoRng)) -> ExternalNetworkId {
-  let all: Vec<_> = ExternalNetworkId::all().collect();
-  #[expect(clippy::as_conversions, clippy::cast_possible_truncation)]
-  all[(rng.next_u64() as usize) % all.len()]
-}
-
-/// Generate a random global session ID (`[u8; 32]`).
-pub fn random_global_session<R: RngCore + CryptoRng>(rng: &mut R) -> [u8; 32] {
-  serai_primitives::test_helpers::random_bytes_32(rng)
-}
-
-/// Generate a random [`Cosign`] for testing.
-pub fn random_cosign(rng: &mut (impl RngCore + CryptoRng)) -> Cosign {
-  Cosign {
-    global_session: random_global_session(rng),
-    block_number: rng.next_u64(),
-    block_hash: random_block_hash(rng),
-    cosigner: random_external_network_id(rng),
-  }
-}
-
-/// Generate a random [`CosignIntent`] for testing.
-pub fn random_cosign_intent(rng: &mut (impl RngCore + CryptoRng)) -> CosignIntent {
-  CosignIntent {
-    global_session: random_global_session(rng),
-    block_number: rng.next_u64(),
-    block_hash: random_block_hash(rng),
-    notable: rng.next_u32() % 2 == 0,
-  }
-}
+use crate::{
+  Cosign, ExternalNetworkId, SignedCosign,
+  test_helpers::{random_cosign, random_cosign_intent, sign_cosign},
+};
 
 #[test]
 fn cosign_intent_into_cosign() {
-  use rand_core::OsRng;
-
   let intent = random_cosign_intent(&mut OsRng);
-  let network = random_external_network_id(&mut OsRng);
+  let network = serai_primitives::test_helpers::random_external_network_id(&mut OsRng);
   let Cosign { global_session, block_number, block_hash, cosigner } = intent.into_cosign(network);
 
   assert_eq!(intent.global_session, global_session);
@@ -60,8 +21,6 @@ fn cosign_intent_into_cosign() {
 
 #[test]
 fn deterministic_and_comprehensive_signature_message() {
-  use rand_core::OsRng;
-
   let cosign = random_cosign(&mut OsRng);
   let msg = cosign.signature_message();
 
@@ -103,9 +62,6 @@ fn deterministic_and_comprehensive_signature_message() {
 
 #[test]
 fn signed_cosign_verify_signature() {
-  use rand_core::OsRng;
-  use serai_primitives::test_helpers::random_keypair;
-
   {
     let (keypair, public) = random_keypair(&mut OsRng);
     let cosign = random_cosign(&mut OsRng);

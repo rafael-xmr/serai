@@ -253,7 +253,7 @@ pub(crate) struct AddTributaryTransactionsTask<CD: DbTrait, TD: DbTrait, P: P2p>
   tributary_db: TD,
   tributary: Tributary<TD, Transaction, P>,
   set: NewSetInformation,
-  key: Zeroizing<<Ristretto as WrappedGroup>::F>,
+  private_serai_auxiliary_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
 }
 impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for AddTributaryTransactionsTask<CD, TD, P> {
   type Error = DoesNotError;
@@ -274,7 +274,7 @@ impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for AddTributaryTransactio
           self.set.set,
           &mut self.tributary_db,
           &self.tributary,
-          &self.key,
+          &self.private_serai_auxiliary_key,
           tx,
         )
         .await
@@ -297,7 +297,7 @@ impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for AddTributaryTransactio
           self.set.set,
           &mut self.tributary_db,
           &self.tributary,
-          &self.key,
+          &self.private_serai_auxiliary_key,
           tx,
         )
         .await
@@ -318,7 +318,13 @@ impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for AddTributaryTransactio
           break;
         };
         if let Some(tx) = PublishOnRecognition::take(&mut tributary_txn, self.set.set, topic) {
-          if !add_signed_unsigned_transaction(&self.tributary, &self.key, tx).await {
+          if !add_signed_unsigned_transaction(
+            &self.tributary,
+            &self.private_serai_auxiliary_key,
+            tx,
+          )
+          .await
+          {
             break;
           }
         }
@@ -331,15 +337,25 @@ impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for AddTributaryTransactio
       loop {
         let mut txn = self.db.txn();
         let Some(participant) = RemoveParticipant::try_recv(&mut txn, self.set.set) else { break };
-        let tx = Transaction::RemoveParticipant {
-          participant: self.set.participant_indexes_reverse_lookup[&participant],
-          signed: Default::default(),
-        };
-        if !add_signed_unsigned_transaction(&self.tributary, &self.key, tx).await {
-          break;
+        if let Some(tributary_participant) =
+          self.set.tributary_validators.get_by_participant(&participant)
+        {
+          let tx = Transaction::RemoveParticipant {
+            participant: tributary_participant.to_address(),
+            signed: Default::default(),
+          };
+          if !add_signed_unsigned_transaction(
+            &self.tributary,
+            &self.private_serai_auxiliary_key,
+            tx,
+          )
+          .await
+          {
+            break;
+          }
+          made_progress = true;
+          txn.commit();
         }
-        made_progress = true;
-        txn.commit();
       }
 
       Ok(made_progress)
@@ -383,7 +399,7 @@ pub(crate) struct SignSlashReportTask<CD: DbTrait, TD: DbTrait, P: P2p> {
   tributary_db: TD,
   tributary: Tributary<TD, Transaction, P>,
   set: NewSetInformation,
-  key: Zeroizing<<Ristretto as WrappedGroup>::F>,
+  private_serai_auxiliary_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
 }
 impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for SignSlashReportTask<CD, TD, P> {
   type Error = DoesNotError;
@@ -396,7 +412,7 @@ impl<CD: DbTrait, TD: DbTrait, P: P2p> ContinuallyRan for SignSlashReportTask<CD
       // Fetch the slash report for this Tributary
       let mut tx =
         serai_coordinator_tributary::slash_report_transaction(&self.tributary_db, &self.set);
-      tx.sign(&mut OsRng, self.tributary.genesis(), &self.key);
+      tx.sign(&mut OsRng, self.tributary.genesis(), &self.private_serai_auxiliary_key);
 
       let res = self.tributary.add_transaction(tx.clone()).await;
       match &res {
@@ -473,7 +489,7 @@ pub(crate) async fn spawn_tributary<P: P2p>(
   p2p: P,
   p2p_add_tributary: &mpsc::UnboundedSender<(ExternalValidatorSet, Tributary<Db, Transaction, P>)>,
   set: NewSetInformation,
-  serai_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
+  private_serai_auxiliary_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
 ) {
   // Don't spawn retired Tributaries
   if crate::db::RetiredTributary::get(&db, set.set.network).map(|session| session.0) >=
@@ -492,13 +508,16 @@ pub(crate) async fn spawn_tributary<P: P2p>(
   const TRIBUTARY_START_TIME_DELAY: u64 = 120;
   let start_time = set.declaration_time + TRIBUTARY_START_TIME_DELAY;
 
-  let mut tributary_validators = Vec::with_capacity(set.validators.len());
-  for (validator, weight) in set.validators.iter().copied() {
-    let validator_key = <Ristretto as GroupIo>::read_G(&mut validator.0.as_slice())
-      .expect("Serai validator had an invalid public key");
-    let weight = u64::from(weight);
-    tributary_validators.push((validator_key, weight));
-  }
+  let tributary_validators = set
+    .tributary_validators
+    .validators
+    .iter()
+    .map(|validator| {
+      let validator_key = <Ristretto as GroupIo>::read_G(&mut validator.substrate_key.as_slice())
+        .expect("Serai validator had an invalid public key");
+      (validator_key, u64::from(validator.weight))
+    })
+    .collect();
 
   // Spawn the Tributary
   let tributary_db = crate::db::tributary_db(set.set);
@@ -506,7 +525,7 @@ pub(crate) async fn spawn_tributary<P: P2p>(
     tributary_db.clone(),
     genesis,
     start_time,
-    serai_key.clone(),
+    private_serai_auxiliary_key.clone(),
     tributary_validators,
     p2p,
   )
@@ -560,7 +579,7 @@ pub(crate) async fn spawn_tributary<P: P2p>(
       tributary_db: tributary_db.clone(),
       tributary: tributary.clone(),
       set: set.clone(),
-      key: serai_key.clone(),
+      private_serai_auxiliary_key: private_serai_auxiliary_key.clone(),
     })
     .continually_run(add_tributary_transactions_task_def, vec![]),
   );
@@ -568,8 +587,13 @@ pub(crate) async fn spawn_tributary<P: P2p>(
   // Spawn the task to confirm the DKG result
   let (confirm_dkg_task_def, confirm_dkg_task) = Task::new();
   tokio::spawn(
-    ConfirmDkgTask::new(db.clone(), set.clone(), tributary_db.clone(), serai_key.clone())
-      .continually_run(confirm_dkg_task_def, vec![add_tributary_transactions_task]),
+    ConfirmDkgTask::new(
+      db.clone(),
+      set.clone(),
+      tributary_db.clone(),
+      private_serai_auxiliary_key.clone(),
+    )
+    .continually_run(confirm_dkg_task_def, vec![add_tributary_transactions_task]),
   );
 
   // Spawn the sign slash report task
@@ -580,7 +604,7 @@ pub(crate) async fn spawn_tributary<P: P2p>(
       tributary_db,
       tributary: tributary.clone(),
       set: set.clone(),
-      key: serai_key,
+      private_serai_auxiliary_key,
     })
     .continually_run(sign_slash_report_task_def, vec![]),
   );

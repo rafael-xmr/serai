@@ -10,9 +10,10 @@ use rand_core::OsRng;
 
 use serai_primitives::{
   address::SeraiAddress,
+  crypto::{TributaryValidatorSet, TributaryValidator},
   test_helpers::{
-    random_block_hash, random_bytes_32, random_bytes_64, random_serai_address, random_vec_u8,
-    default_test_validator_set,
+    default_test_validator_set, random_block_hash, random_bytes_32, random_bytes_64,
+    random_serai_address, random_vec_u8,
   },
 };
 
@@ -22,7 +23,6 @@ use tendermint::{
   ext::{BlockNumber, RoundNumber},
 };
 use zeroize::Zeroizing;
-use dkg::Participant;
 use serai_coordinator_substrate::NewSetInformation;
 
 use crate::*;
@@ -274,34 +274,41 @@ pub(crate) fn assert_block_side_effects(
   assert_no_pending_messages(txn, set);
 }
 
-pub(crate) fn new_test_set_info(validators: &[(SeraiAddress, u16)]) -> NewSetInformation {
-  let mut participant_indexes = HashMap::new();
-  let mut reverse_lookup = HashMap::new();
-  let mut i = 1u16;
-  for (address, weight) in validators {
-    let mut indices = Vec::new();
-    for _ in 0 .. *weight {
-      let p = Participant::new(i).unwrap();
-      indices.push(p);
-      reverse_lookup.insert(p, *address);
-      i += 1;
-    }
-    participant_indexes.insert(*address, indices);
-  }
+pub(crate) fn key_set_from_serai_addresses(
+  validators: &[(SeraiAddress, u16)],
+) -> TributaryValidatorSet {
+  let keyed_validators: Vec<_> = validators
+    .iter()
+    .map(|(addr, weight)| TributaryValidator {
+      substrate_key: addr.0,
+      network_key: addr.0.to_vec(),
+      weight: *weight,
+    })
+    .collect();
 
-  NewSetInformation {
+  let mut keyed_set = TributaryValidatorSet {
+    validators: keyed_validators,
+    participant_indexes: HashMap::new(),
+    participant_indexes_reverse_lookup: HashMap::new(),
+  };
+  keyed_set.init_participant_indexes();
+  keyed_set
+}
+
+pub(crate) fn new_test_set_info(mut validators: TributaryValidatorSet) -> NewSetInformation {
+  validators.init_participant_indexes();
+  let new_set = NewSetInformation {
     set: default_test_validator_set(),
     serai_block: random_bytes_32(&mut OsRng),
     declaration_time: OsRng.next_u64(),
-    threshold: OsRng.gen_range(0 ..= u16::MAX),
-    validators: validators.to_vec(),
-    evrf_public_keys: vec![],
-    participant_indexes,
-    participant_indexes_reverse_lookup: reverse_lookup,
-  }
+    tributary_validators: validators,
+  };
+
+  new_set
 }
 
 pub(crate) type ValidatorSetup = (
+  TributaryValidatorSet,
   Vec<(RistrettoPoint, SeraiAddress)>,
   Vec<(SeraiAddress, u16)>,
   Vec<SeraiAddress>,
@@ -313,13 +320,30 @@ pub(crate) type ValidatorSetup = (
 pub(crate) fn setup_n_validators_with_keys(n: u16) -> ValidatorSetup {
   let keys_addrs: Vec<(RistrettoPoint, SeraiAddress)> =
     (0 .. n).map(|_| random_serai_address_and_key(&mut OsRng)).collect();
+
+  let keyed_validators: Vec<_> = keys_addrs
+    .iter()
+    .map(|(point, _)| TributaryValidator {
+      substrate_key: point.to_bytes(),
+      network_key: point.to_bytes().to_vec(),
+      weight: 1,
+    })
+    .collect();
+
+  let mut keyed_set = TributaryValidatorSet {
+    validators: keyed_validators,
+    participant_indexes: HashMap::new(),
+    participant_indexes_reverse_lookup: HashMap::new(),
+  };
+  keyed_set.init_participant_indexes();
+
   let validator_data: Vec<(SeraiAddress, u16)> =
     keys_addrs.iter().map(|(_, addr)| (*addr, 1u16)).collect();
   let validators: Vec<SeraiAddress> = validator_data.iter().map(|(a, _)| *a).collect();
   let weights: HashMap<SeraiAddress, u16> = validator_data.iter().copied().collect();
   let total_weight = n;
 
-  (keys_addrs, validator_data, validators, weights, total_weight)
+  (keyed_set, keys_addrs, validator_data, validators, weights, total_weight)
 }
 
 /// Common test setup with 3 random validators each with weight 1, total_weight = 3.

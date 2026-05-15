@@ -25,7 +25,9 @@ impl TaskTest {
   }
 }
 
-use std::{future::Future, sync::Arc};
+use core::future::Future;
+extern crate alloc;
+use alloc::sync::Arc;
 
 /// Shared state used by Serai task tests.
 pub struct SeraiTaskTestState {

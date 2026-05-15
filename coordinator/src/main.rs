@@ -7,10 +7,7 @@ use zeroize::{Zeroize as _, Zeroizing};
 use rand_core::{RngCore as _, OsRng};
 
 use dalek_ff_group::Ristretto;
-use ciphersuite::{
-  group::{ff::PrimeField as _, GroupEncoding as _},
-  *,
-};
+use ciphersuite::{group::ff::PrimeField as _, *};
 
 use borsh::BorshDeserialize as _;
 
@@ -22,7 +19,6 @@ use serai_client_serai::{
     crypto::{Public, ExternalKey, KeyPair},
     network_id::ExternalNetworkId,
     validator_sets::ExternalValidatorSet,
-    address::SeraiAddress,
   },
   Serai,
 };
@@ -332,10 +328,10 @@ async fn handle_network(
 async fn main() {
   // Initialize the logger
   serai_env::init_logger();
-  serai_env::info!("starting coordinator service...");
+  serai_env::info!("Starting coordinator service...");
 
   // Read the Serai key from the env
-  let serai_key = {
+  let private_serai_auxiliary_key = {
     let mut key_hex = serai_env::var("SERAI_KEY").expect("Serai key wasn't provided");
     let mut key_vec = hex::decode(&key_hex).map_err(|_| ()).expect("Serai key wasn't hex-encoded");
     key_hex.zeroize();
@@ -399,18 +395,18 @@ async fn main() {
 
   // Spawn the P2P network
   let p2p = {
-    let serai_keypair = {
-      let mut key_bytes = serai_key.to_bytes();
+    let serai_auxiliary_keypair = {
+      let mut private_serai_auxiliary_key_bytes = private_serai_auxiliary_key.to_bytes();
       // Schnorrkel SecretKey is the key followed by 32 bytes of entropy for nonces
       let mut expanded_key = Zeroizing::new([0; 64]);
-      expanded_key.as_mut_slice()[.. 32].copy_from_slice(&key_bytes);
+      expanded_key.as_mut_slice()[.. 32].copy_from_slice(&private_serai_auxiliary_key_bytes);
       OsRng.fill_bytes(&mut expanded_key.as_mut_slice()[32 ..]);
-      key_bytes.zeroize();
+      private_serai_auxiliary_key_bytes.zeroize();
       Zeroizing::new(
         schnorrkel::SecretKey::from_bytes(expanded_key.as_slice()).unwrap().to_keypair(),
       )
     };
-    let p2p = p2p::Libp2p::new(&serai_keypair, serai.clone());
+    let p2p = p2p::Libp2p::new(&serai_auxiliary_keypair, serai.clone());
     tokio::spawn(p2p::run::<Db, Transaction, _>(
       db.clone(),
       p2p.clone(),
@@ -433,7 +429,7 @@ async fn main() {
     EphemeralEventStream::new(
       db.clone(),
       serai.clone(),
-      SeraiAddress((<Ristretto as WrappedGroup>::generator() * serai_key.deref()).to_bytes()),
+      <Ristretto as WrappedGroup>::generator() * private_serai_auxiliary_key.deref(),
     )
     .continually_run(substrate_ephemeral_task_def, vec![substrate_task]),
   );
@@ -456,7 +452,7 @@ async fn main() {
       p2p.clone(),
       &p2p_add_tributary_send,
       tributary,
-      serai_key.clone(),
+      private_serai_auxiliary_key.clone(),
     )
     .await;
   }
@@ -464,7 +460,7 @@ async fn main() {
   // Handle the events from the Substrate scanner
   tokio::spawn(
     (SubstrateTask {
-      serai_key: serai_key.clone(),
+      private_serai_auxiliary_key,
       db: db.clone(),
       message_queue: message_queue.clone(),
       p2p: p2p.clone(),

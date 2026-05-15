@@ -12,7 +12,11 @@ use borsh::{BorshSerialize, BorshDeserialize};
 
 use serai_client_serai::{
   abi::primitives::{
-    BlockHash, crypto::Public, network_id::ExternalNetworkId, validator_sets::ExternalValidatorSet,
+    BlockHash,
+    crypto::{Public, EmbeddedEllipticCurveKeys as AuxiliaryKeysStruct},
+    network_id::ExternalNetworkId,
+    validator_sets::ExternalValidatorSet,
+    address::SeraiAddress,
   },
   Serai,
 };
@@ -24,6 +28,20 @@ pub use serai_cosign_types::*;
 
 /// The cosigns which are intended to be performed.
 mod intend;
+
+/// The channel for new set events emitted by an ephemeral event stream.
+pub struct AuxiliaryKeys;
+impl AuxiliaryKeys {
+  /// Try to receive a new set's information, returning `None` if there is none to receive.
+  pub fn get(
+    getter: &impl Get,
+    network: ExternalNetworkId,
+    validator: SeraiAddress,
+  ) -> Option<AuxiliaryKeysStruct> {
+    intend::AuxiliaryKeys::get(getter, network.into(), validator)
+  }
+}
+
 /// The evaluator of the cosigns.
 mod evaluator;
 /// The task to delay acknowledgement of the cosigns.
@@ -165,37 +183,7 @@ create_db! {
 
 /// Utilities for seeding the cosign DB in tests and test-helper contexts.
 #[cfg(any(test, feature = "test-helpers"))]
-pub mod test_utils {
-  use serai_client_serai::abi::primitives::BlockHash;
-  use serai_db::DbTxn;
-  use crate::{SubstrateBlockHash, FaultedSession};
-  use crate::delay::LatestCosignedBlockNumber;
-
-  /// Seed the DB with the hash for a cosigned Substrate block number.
-  pub fn set_substrate_block_hash(txn: &mut impl DbTxn, block_number: u64, hash: &BlockHash) {
-    SubstrateBlockHash::set(txn, block_number, hash);
-  }
-
-  /// Seed the DB with the latest cosigned block number.
-  pub fn set_latest_cosigned_block_number(txn: &mut impl DbTxn, block_number: u64) {
-    LatestCosignedBlockNumber::set(txn, &block_number);
-  }
-
-  /// Seed the DB to mark a global session as faulted.
-  pub fn set_faulted_session(txn: &mut impl DbTxn, global_session: [u8; 32]) {
-    FaultedSession::set(txn, &global_session);
-  }
-
-  /// Delete the hash for a cosigned Substrate block number.
-  pub fn del_substrate_block_hash(txn: &mut impl DbTxn, block_number: u64) {
-    SubstrateBlockHash::del(txn, block_number);
-  }
-
-  /// Delete the latest cosigned block number.
-  pub fn del_latest_cosigned_block_number(txn: &mut impl DbTxn) {
-    LatestCosignedBlockNumber::del(txn);
-  }
-}
+pub mod test_helpers;
 
 /// An object usable to request notable cosigns for a block.
 pub trait RequestNotableCosigns: 'static + Send + Sync {

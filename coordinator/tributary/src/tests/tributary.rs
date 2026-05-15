@@ -30,7 +30,7 @@ fn slash_report() {
       (random_serai_address(&mut OsRng), 1),
       (random_serai_address(&mut OsRng), 1),
     ];
-    let set_info = new_test_set_info(&validators);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&validators));
 
     let (points, signed) = unwrap_slash_report(slash_report_transaction(&db, &set_info));
     assert_eq!(points, vec![0, 0, 0]);
@@ -46,7 +46,7 @@ fn slash_report() {
       random_serai_address(&mut OsRng),
       random_serai_address(&mut OsRng),
     );
-    let set_info = new_test_set_info(&[(v1, 1), (v2, 1), (v3, 1), (v4, 1)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(v1, 1), (v2, 1), (v3, 1), (v4, 1)]));
 
     let (slash1, slash2, slash3, slash4) =
       (OsRng.next_u32(), OsRng.next_u32(), OsRng.next_u32(), OsRng.next_u32());
@@ -71,7 +71,7 @@ fn slash_report() {
   {
     let mut db = MemDb::new();
     let (v1, v2) = (random_serai_address(&mut OsRng), random_serai_address(&mut OsRng));
-    let set_info = new_test_set_info(&[(v1, 1), (v2, 1)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(v1, 1), (v2, 1)]));
 
     {
       let mut txn = db.txn();

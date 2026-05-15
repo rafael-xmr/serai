@@ -5,9 +5,13 @@ use borsh::{BorshSerialize, BorshDeserialize};
 
 use serai_primitives::{BlockHash, crypto::Public, network_id::ExternalNetworkId};
 
-#[cfg(any(test, feature = "test-helpers"))]
+#[cfg(test)]
 /// Test helpers and fixtures.
 pub mod tests;
+
+#[cfg(any(test, feature = "test-helpers"))]
+/// Test helpers and fixtures.
+pub mod test_helpers;
 
 /// The schnorrkel context to used when signing a cosign.
 pub const COSIGN_CONTEXT: &[u8] = b"/serai/coordinator/cosign";

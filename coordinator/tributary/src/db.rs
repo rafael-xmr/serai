@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use borsh::{BorshSerialize, BorshDeserialize};
 
-use serai_primitives::{BlockHash, validator_sets::ExternalValidatorSet, address::SeraiAddress};
+use ciphersuite::WrappedGroup;
+use dalek_ff_group::Ristretto;
+use dkg::Participant;
+use serai_coordinator_substrate::NewSetInformation;
+use serai_primitives::{BlockHash, validator_sets::ExternalValidatorSet};
 
 use messages::sign::{VariantSignId, SignId};
 
@@ -18,7 +22,7 @@ pub enum Topic {
   /// Vote to remove a participant
   RemoveParticipant {
     /// The participant to remove
-    participant: SeraiAddress,
+    participant: Participant,
   },
 
   // DkgParticipation isn't represented here as participations are immediately sent to the
@@ -228,7 +232,7 @@ pub(crate) enum DataSet<D: Borshy> {
   /// (non-existent, not ready, prior handled, not participating, etc.)
   None,
   /// The data set was ready and we are participating in this event
-  Participating(HashMap<SeraiAddress, D>),
+  Participating(HashMap<Participant, D>),
 }
 
 create_db!(
@@ -237,7 +241,7 @@ create_db!(
     LastHandledTributaryBlock: (set: ExternalValidatorSet) -> (u64, [u8; 32]),
 
     // The slash points a validator has accrued, with u32::MAX representing a fatal slash.
-    SlashPoints: (set: ExternalValidatorSet, validator: SeraiAddress) -> u32,
+    SlashPoints: (set: ExternalValidatorSet, validator: Participant) -> u32,
 
     // The cosign intent for a Substrate block
     CosignIntents: (set: ExternalValidatorSet, substrate_block_hash: BlockHash) -> CosignIntent,
@@ -260,7 +264,7 @@ create_db!(
     Accumulated: <D: Borshy>(
       set: ExternalValidatorSet,
       topic: Topic,
-      validator: SeraiAddress
+      validator: Participant
     ) -> D,
 
     // Topics to be recognized as of a certain block number due to the reattempt protocol.
@@ -412,7 +416,7 @@ impl TributaryDb {
   pub(crate) fn fatal_slash(
     txn: &mut impl DbTxn,
     set: ExternalValidatorSet,
-    validator: SeraiAddress,
+    validator: Participant,
     #[cfg_attr(coverage, allow(unused_variables))] reason: &str,
   ) {
     serai_env::warn!("{validator} fatally slashed: {reason}");
@@ -422,7 +426,7 @@ impl TributaryDb {
   pub(crate) fn is_fatally_slashed(
     getter: &impl Get,
     set: ExternalValidatorSet,
-    validator: SeraiAddress,
+    validator: Participant,
   ) -> bool {
     SlashPoints::get(getter, set, validator).unwrap_or(0) == u32::MAX
   }
@@ -430,15 +434,18 @@ impl TributaryDb {
   #[expect(clippy::too_many_arguments)]
   pub(crate) fn accumulate<D: Borshy>(
     txn: &mut impl DbTxn,
-    set: ExternalValidatorSet,
-    validators: &[SeraiAddress],
-    total_weight: u16,
+    new_set: &NewSetInformation,
     block_number: u64,
     topic: Topic,
-    validator: SeraiAddress,
-    validator_weight: u16,
+    validator: <Ristretto as WrappedGroup>::G,
     data: &D,
   ) -> DataSet<D> {
+    let tributary_validator =
+      new_set.tributary_validators.get_by_substrate_public(&validator).unwrap();
+    let validator =
+      *new_set.tributary_validators.get_participant_by_substrate_public(&validator).unwrap();
+    let set = new_set.set;
+
     // This function will only be called once for a (validator, topic) tuple due to how we handle
     // nonces on transactions (deterministically to the topic)
     assert!(
@@ -475,7 +482,8 @@ impl TributaryDb {
       }
     }
 
-    let required_participation = required_participation(total_weight);
+    let required_participation =
+      required_participation(new_set.tributary_validators.total_weight());
 
     // The complete lack of validation on the data by these NOPs opens the potential for spam here
 
@@ -491,9 +499,13 @@ impl TributaryDb {
     }
 
     // Accumulate the data
-    accumulated_weight = accumulated_weight.checked_add(validator_weight).unwrap_or_else(|| {
-      panic!("accumulated {accumulated_weight} overflowed adding validator's {validator_weight}")
-    });
+    accumulated_weight =
+      accumulated_weight.checked_add(tributary_validator.weight).unwrap_or_else(|| {
+        panic!(
+          "accumulated {accumulated_weight} overflowed adding validator's {}",
+          tributary_validator.weight
+        )
+      });
     AccumulatedWeight::set(txn, set, topic, &accumulated_weight);
     Accumulated::set(txn, set, topic, validator, data);
 
@@ -522,8 +534,8 @@ impl TributaryDb {
       }
 
       // Fetch and return all participations
-      let mut data_set = HashMap::with_capacity(validators.len());
-      for validator in validators {
+      let mut data_set = HashMap::with_capacity(new_set.tributary_validators.len());
+      for (validator, _) in new_set.tributary_validators.participant_indexes_reverse_lookup.iter() {
         if let Some(data) = Accumulated::<D>::get(txn, set, topic, *validator) {
           // Clean this data up if there's not a re-attempt topic
           // If there is a re-attempt topic, we clean it up upon re-attempt

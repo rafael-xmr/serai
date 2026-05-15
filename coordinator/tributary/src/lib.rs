@@ -6,13 +6,14 @@
 use core::{marker::PhantomData, future::Future};
 use std::collections::HashMap;
 
-use ciphersuite::group::GroupEncoding as _;
+use ciphersuite::WrappedGroup;
+use dalek_ff_group::Ristretto;
 use dkg::Participant;
 
 use serai_primitives::{
   BlockHash,
   validator_sets::{ExternalValidatorSet, Slash},
-  address::SeraiAddress,
+  crypto::SubstrateAuxiliaryPubKey,
 };
 
 use serai_db::*;
@@ -137,9 +138,6 @@ struct ScanBlock<'a, TD: Db, TDT: DbTxn, P: P2p> {
   _p2p: PhantomData<P>,
   tributary_txn: &'a mut TDT,
   set: &'a NewSetInformation,
-  validators: &'a [SeraiAddress],
-  total_weight: u16,
-  validator_weights: &'a HashMap<SeraiAddress, u16>,
 }
 impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
   fn potentially_start_cosign(&mut self) {
@@ -191,7 +189,7 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
     block_number: u64,
     topic: Topic,
     data: &D,
-    signer: SeraiAddress,
+    signer: <Ristretto as WrappedGroup>::G,
   ) -> Option<(SignId, HashMap<Participant, Vec<u8>>)> {
     assert!(
       matches!(topic, Topic::DkgConfirmation { .. }),
@@ -199,57 +197,31 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
     );
     match TributaryDb::accumulate::<D>(
       self.tributary_txn,
-      self.set.set,
-      self.validators,
-      self.total_weight,
+      self.set,
       block_number,
       topic,
       signer,
-      self.validator_weights[&signer],
       data,
     ) {
       DataSet::None => None,
-      DataSet::Participating(data_set) => {
-        let id = topic.dkg_confirmation_sign_id(self.set.set).unwrap();
-
-        // This will be used in a MuSig protocol, so the Participant indexes are the validator's
-        // position in the list regardless of their weight
-        let flatten_data_set = |data_set: HashMap<_, D>| {
-          let mut entries = HashMap::with_capacity(usize::from(self.total_weight));
-          for (validator, participation) in data_set {
-            let (index, (_validator, _weight)) = &self
-              .set
-              .validators
-              .iter()
-              .enumerate()
-              .find(|(_i, (validator_i, _weight))| validator == *validator_i)
-              .unwrap();
-            // The index is zero-indexed yet participants are one-indexed
-            let index = index + 1;
-
-            entries.insert(
-              Participant::new(u16::try_from(index).unwrap()).unwrap(),
-              participation.as_ref().to_vec(),
-            );
-          }
-          entries
-        };
-        let data_set = flatten_data_set(data_set);
-        Some((id, data_set))
-      }
+      DataSet::Participating(data_set) => Some((
+        topic.dkg_confirmation_sign_id(self.set.set).unwrap(),
+        data_set
+          .into_iter()
+          .map(|(participant, participation)| (participant, participation.as_ref().to_vec()))
+          .collect(),
+      )),
     }
   }
 
   fn handle_application_tx(&mut self, block_number: u64, tx: Transaction) {
-    let signer = |signed: Signed| SeraiAddress(signed.signer().to_bytes());
-
     if let TransactionKind::Signed(_, TributarySigned { signer, .. }) = tx.kind() {
       // Don't handle transactions from those fatally slashed
       // TODO: The fact they can publish these TXs makes this a notable spam vector
       if TributaryDb::is_fatally_slashed(
         self.tributary_txn,
         self.set.set,
-        SeraiAddress(signer.to_bytes()),
+        *self.set.tributary_validators.get_participant_by_substrate_public(&signer).unwrap(),
       ) {
         return;
       }
@@ -259,14 +231,14 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
     match tx {
       // Accumulate this vote and fatally slash the participant if past the threshold
       Transaction::RemoveParticipant { participant, signed } => {
-        let signer = signer(signed);
+        let signer = signed.signer();
 
         // Check the participant voted to be removed actually exists
-        if !self.validators.contains(&participant) {
+        if self.set.tributary_validators.get_by_participant(&participant).is_none() {
           TributaryDb::fatal_slash(
             self.tributary_txn,
             self.set.set,
-            signer,
+            *self.set.tributary_validators.get_participant_by_substrate_public(&signer).unwrap(),
             "voted to remove non-existent participant",
           );
           return;
@@ -274,13 +246,10 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
 
         match TributaryDb::accumulate(
           self.tributary_txn,
-          self.set.set,
-          self.validators,
-          self.total_weight,
+          &self.set,
           block_number,
           topic.unwrap(),
           signer,
-          self.validator_weights[&signer],
           &(),
         ) {
           DataSet::None => {}
@@ -302,14 +271,18 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
           self.set.set,
           messages::key_gen::CoordinatorMessage::Participation {
             session: self.set.set.session,
-            participant: self.set.participant_indexes[&signer(signed)][0],
+            participant: *self
+              .set
+              .tributary_validators
+              .get_participant_by_substrate_public(&signed.signer())
+              .expect("signer not in validator set"),
             participation,
           },
         );
       }
       Transaction::DkgConfirmationPreprocess { attempt: _, preprocess, signed } => {
         let topic = topic.unwrap();
-        let signer = signer(signed);
+        let signer = signed.signer();
 
         let Some((id, data_set)) =
           self.accumulate_dkg_confirmation(block_number, topic, &preprocess, signer)
@@ -325,7 +298,7 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
       }
       Transaction::DkgConfirmationShare { attempt: _, share, signed } => {
         let topic = topic.unwrap();
-        let signer = signer(signed);
+        let signer = signed.signer();
 
         let Some((id, data_set)) =
           self.accumulate_dkg_confirmation(block_number, topic, &share, signer)
@@ -405,13 +378,13 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
       }
 
       Transaction::SlashReport { slash_points, signed } => {
-        let signer = signer(signed);
+        let signer = signed.signer();
 
-        if slash_points.len() != self.validators.len() {
+        if slash_points.len() != self.set.tributary_validators.len() {
           TributaryDb::fatal_slash(
             self.tributary_txn,
             self.set.set,
-            signer,
+            *self.set.tributary_validators.get_participant_by_substrate_public(&signer).unwrap(),
             "slash report was for a distinct amount of signers",
           );
           return;
@@ -420,13 +393,10 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
         // Accumulate, and if past the threshold, calculate *the* slash report and start signing it
         match TributaryDb::accumulate(
           self.tributary_txn,
-          self.set.set,
-          self.validators,
-          self.total_weight,
+          self.set,
           block_number,
           topic.unwrap(),
           signer,
-          self.validator_weights[&signer],
           &slash_points,
         ) {
           DataSet::None => {}
@@ -439,8 +409,9 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
               but the median believe the slash should be fatal, we need to fallback to a large
               constant.
             */
-            let mut median_slash_report = Vec::with_capacity(self.validators.len());
-            for i in 0 .. self.validators.len() {
+            let validators_len = self.set.tributary_validators.len();
+            let mut median_slash_report = Vec::with_capacity(validators_len);
+            for i in 0 .. validators_len {
               let mut this_validator =
                 data_set.values().map(|report| report[i]).collect::<Vec<_>>();
               this_validator.sort_unstable();
@@ -458,13 +429,13 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
             // 2) Ensure the signing threshold doesn't have a disincentive to do their job
 
             // Find the worst performer within the signing threshold's slash points
-            let f = (self.validators.len() - 1) / 3;
+            let f = (validators_len - 1) / 3;
             let worst_validator_in_supermajority_slash_points = {
               let mut sorted_slash_points = median_slash_report.clone();
               sorted_slash_points.sort_unstable();
               // This won't be a valid index if `f == 0`, which means we don't have any validators
               // to slash
-              let index_of_first_validator_to_slash = self.validators.len() - f;
+              let index_of_first_validator_to_slash = validators_len - f;
               let index_of_worst_validator_in_supermajority = index_of_first_validator_to_slash - 1;
               sorted_slash_points[index_of_worst_validator_in_supermajority]
             };
@@ -514,13 +485,17 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
 
       Transaction::Sign { id: _, attempt: _, round, data, signed } => {
         let topic = topic.unwrap();
-        let signer = signer(signed);
+        let signer = signed.signer();
 
-        if data.len() != usize::from(self.validator_weights[&signer]) {
+        if data.len() !=
+          usize::from(
+            self.set.tributary_validators.get_by_substrate_public(&signer).unwrap().weight,
+          )
+        {
           TributaryDb::fatal_slash(
             self.tributary_txn,
             self.set.set,
-            signer,
+            *self.set.tributary_validators.get_participant_by_substrate_public(&signer).unwrap(),
             "signer signed with a distinct amount of key shares than they had key shares",
           );
           return;
@@ -528,22 +503,22 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
 
         match TributaryDb::accumulate(
           self.tributary_txn,
-          self.set.set,
-          self.validators,
-          self.total_weight,
+          self.set,
           block_number,
           topic,
           signer,
-          self.validator_weights[&signer],
           &data,
         ) {
           DataSet::None => {}
           DataSet::Participating(data_set) => {
             let id = topic.sign_id(self.set.set).expect("Topic::Sign didn't have SignId");
-            let flatten_data_set = |data_set: HashMap<_, Vec<_>>| {
-              let mut entries = HashMap::with_capacity(usize::from(self.total_weight));
+            let flatten_data_set = |data_set: HashMap<Participant, Vec<_>>| {
+              let mut entries =
+                HashMap::with_capacity(usize::from(self.set.tributary_validators.total_weight()));
               for (validator, shares) in data_set {
-                let indexes = &self.set.participant_indexes[&validator];
+                let validator =
+                  &self.set.tributary_validators.participant_indexes_reverse_lookup[&validator];
+                let indexes = &self.set.tributary_validators.participant_indexes[&validator];
                 assert_eq!(indexes.len(), shares.len());
                 for (index, share) in indexes.iter().zip(shares) {
                   entries.insert(*index, share);
@@ -594,7 +569,13 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
           TributaryDb::fatal_slash(
             self.tributary_txn,
             self.set.set,
-            SeraiAddress(msgs.0.msg.sender),
+            *self
+              .set
+              .tributary_validators
+              .get_participant_by_substrate_public(
+                &SubstrateAuxiliaryPubKey::from_bytes(msgs.0.msg.sender).unwrap().0,
+              )
+              .unwrap(),
             &format!("invalid tendermint messages: {msgs:?}"),
           );
         }
@@ -610,9 +591,6 @@ impl<TD: Db, TDT: DbTxn, P: P2p> ScanBlock<'_, TD, TDT, P> {
 pub struct ScanTributaryTask<TD: Db, P: P2p> {
   tributary_db: TD,
   set: NewSetInformation,
-  validators: Vec<SeraiAddress>,
-  total_weight: u16,
-  validator_weights: HashMap<SeraiAddress, u16>,
   tributary: TributaryReader<TD, Transaction>,
   _p2p: PhantomData<P>,
 }
@@ -624,24 +602,7 @@ impl<TD: Db, P: P2p> ScanTributaryTask<TD, P> {
     set: NewSetInformation,
     tributary: TributaryReader<TD, Transaction>,
   ) -> Self {
-    let mut validators = Vec::with_capacity(set.validators.len());
-    let mut total_weight = 0;
-    let mut validator_weights = HashMap::with_capacity(set.validators.len());
-    for (validator, weight) in set.validators.iter().copied() {
-      validators.push(validator);
-      total_weight += weight;
-      validator_weights.insert(validator, weight);
-    }
-
-    ScanTributaryTask {
-      tributary_db,
-      set,
-      validators,
-      total_weight,
-      validator_weights,
-      tributary,
-      _p2p: PhantomData,
-    }
+    ScanTributaryTask { tributary_db, set, tributary, _p2p: PhantomData }
   }
 }
 
@@ -680,9 +641,6 @@ impl<TD: Db, P: P2p> ContinuallyRan for ScanTributaryTask<TD, P> {
           _p2p: PhantomData::<P>,
           tributary_txn: &mut tributary_txn,
           set: &self.set,
-          validators: &self.validators,
-          total_weight: self.total_weight,
-          validator_weights: &self.validator_weights,
         })
         .handle_block(block_number, block);
         TributaryDb::set_last_handled_tributary_block(
@@ -705,9 +663,16 @@ impl<TD: Db, P: P2p> ContinuallyRan for ScanTributaryTask<TD, P> {
 
 /// Create the Transaction::SlashReport to publish per the local view.
 pub fn slash_report_transaction(getter: &impl Get, set: &NewSetInformation) -> Transaction {
-  let mut slash_points = Vec::with_capacity(set.validators.len());
-  for (validator, _weight) in set.validators.iter().copied() {
-    slash_points.push(SlashPoints::get(getter, set.set, validator).unwrap_or(0));
+  let mut slash_points = Vec::with_capacity(set.tributary_validators.len());
+  for validator in set.tributary_validators.validators.iter() {
+    slash_points.push(
+      SlashPoints::get(
+        getter,
+        set.set,
+        *set.tributary_validators.get_participant_by_validator(&validator).unwrap(),
+      )
+      .unwrap_or(0),
+    );
   }
   Transaction::SlashReport { slash_points, signed: Signed::default() }
 }

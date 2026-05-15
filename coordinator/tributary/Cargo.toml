@@ -51,6 +51,7 @@ tributary-sdk = { path = "../tributary-sdk", features = ["tests"] }
 tokio = { version = "1", default-features = false, features = ["rt", "time", "macros", "rt-multi-thread"] }
 serai-task = { path = "../../common/task", features = ["test-helpers"] }
 serai-substrate-tests = { path = "../../tests/substrate" }
+serai-coordinator-substrate = { path = "../substrate", features = ["test-helpers"] }
 
 [features]
 longer-reattempts = []

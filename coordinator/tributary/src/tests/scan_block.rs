@@ -43,9 +43,9 @@ fn new_signed(signer: RistrettoPoint) -> Signed {
 
 #[test]
 fn potentially_start_cosign() {
-  let (_, validator_data, validators, weights, total_weight) =
+  let (keyed_set, _, _, validators, weights, total_weight) =
     setup_test_validators_and_weights_with_keys();
-  let set_info = new_test_set_info(&validator_data);
+  let set_info = new_test_set_info(keyed_set.clone());
   let set = set_info.set;
 
   // Already actively cosigning: should not replace the actively cosigning block
@@ -176,10 +176,10 @@ fn potentially_start_cosign() {
 
 #[test]
 fn accumulate_dkg_confirmation() {
-  let (_, validator_data, validators, weights, total_weight) =
+  let (keyed_set, _, validator_data, validators, weights, total_weight) =
     setup_test_validators_and_weights_with_keys();
   let (v1, v2, v3) = (validators[0], validators[1], validators[2]);
-  let set_info = new_test_set_info(&validator_data);
+  let set_info = new_test_set_info(keyed_set.clone());
   let set = set_info.set;
   let topic = Topic::DkgConfirmation { attempt: 0, round: SigningProtocolRound::Preprocess };
 
@@ -242,7 +242,7 @@ fn accumulate_dkg_confirmation() {
       let validators_4: Vec<SeraiAddress> = validator_data_4.iter().map(|(a, _)| *a).collect();
       let mut weights_4 = weights.clone();
       weights_4.insert(v4, 1);
-      let set_info_4 = new_test_set_info(&validator_data_4);
+      let set_info_4 = new_test_set_info(key_set_from_serai_addresses(&validator_data_4));
 
       let data4 = random_vec_of_len(&mut OsRng, 4);
 
@@ -263,9 +263,9 @@ mod handle_application_tx {
   #[test]
   fn dont_handle_signed_kind_from_fatally_slashed() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let default_signer = SeraiAddress(Signed::default().signer().to_bytes());
 
     let mut db = MemDb::new();
@@ -295,9 +295,9 @@ mod handle_application_tx {
   #[test]
   fn remove_participant() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let default_signer = SeraiAddress(Signed::default().signer().to_bytes());
 
     // The signer is fatally slashed if the participant voted to be removed is nonexistent
@@ -318,8 +318,9 @@ mod handle_application_tx {
 
     // Valid RemoveParticipant accumulates weight and eventually crosses threshold
     {
-      let (keys_addrs, validator_data, validators, weights, _) = setup_n_validators_with_keys(3);
-      let set_info = new_test_set_info(&validator_data);
+      let (keyed_set, keys_addrs, _validator_data, validators, weights, _) =
+        setup_n_validators_with_keys(3);
+      let set_info = new_test_set_info(keyed_set.clone());
       let (key0, addr0) = keys_addrs[0];
       let (key1, _) = keys_addrs[1];
       let (key2, _) = keys_addrs[2];
@@ -371,9 +372,9 @@ mod handle_application_tx {
     let mut db = MemDb::new();
 
     let set = default_test_validator_set();
-    let (keys_addrs, validator_data, validators, weights, total_weight) =
+    let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let (signer_key, _) = keys_addrs[0];
 
     let mut txn = db.txn();
@@ -395,9 +396,9 @@ mod handle_application_tx {
   #[test]
   fn dkg_confirmation_preprocess() {
     let set = default_test_validator_set();
-    let (keys_addrs, validator_data, validators, weights, total_weight) =
+    let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let (key0, key1, key2) = (keys_addrs[0].0, keys_addrs[1].0, keys_addrs[2].0);
 
     let mut db = MemDb::new();
@@ -439,9 +440,9 @@ mod handle_application_tx {
   #[test]
   fn dkg_confirmation_share() {
     let set = default_test_validator_set();
-    let (keys_addrs, validator_data, validators, weights, total_weight) =
+    let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let (key0, addr0) = keys_addrs[0];
     let (key1, key2) = (keys_addrs[1].0, keys_addrs[2].0);
 
@@ -530,9 +531,9 @@ mod handle_application_tx {
   #[test]
   fn cosign() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
 
     let block_hash = random_block_hash(&mut OsRng);
     let global_session = random_bytes_32(&mut OsRng);
@@ -594,9 +595,9 @@ mod handle_application_tx {
   #[test]
   fn cosigned() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
 
     // Marks block as cosigned
     {
@@ -670,9 +671,9 @@ mod handle_application_tx {
   #[test]
   fn substrate_block() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
 
     let mut db = MemDb::new();
     let block_hash = random_block_hash(&mut OsRng);
@@ -702,9 +703,9 @@ mod handle_application_tx {
   #[test]
   fn batch() {
     let set = default_test_validator_set();
-    let (_, validator_data, validators, weights, total_weight) =
+    let (keyed_set, _, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
 
     let mut db = MemDb::new();
     let batch_hash = random_bytes_32(&mut OsRng);
@@ -735,9 +736,9 @@ mod handle_application_tx {
 
       let set = default_test_validator_set();
 
-      let (keys_addrs, validator_data, validators, weights, total_weight) =
+      let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
         setup_n_validators_with_keys(num_validators);
-      let set_info = new_test_set_info(&validator_data);
+      let set_info = new_test_set_info(keyed_set.clone());
 
       let mut db = MemDb::new();
       let mut txn = db.txn();
@@ -772,9 +773,9 @@ mod handle_application_tx {
       let num_reports = usize::from(required_participation(num_validators));
 
       let set = default_test_validator_set();
-      let (keys_addrs, validator_data, validators, weights, total_weight) =
+      let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
         setup_n_validators_with_keys(num_validators);
-      let set_info = new_test_set_info(&validator_data);
+      let set_info = new_test_set_info(keyed_set.clone());
 
       let mut report = vec![0u32; usize::from(num_validators)];
       report[0] = u32::MAX;
@@ -853,9 +854,9 @@ mod handle_application_tx {
 
           let set = default_test_validator_set();
 
-          let (keys_addrs, validator_data, validators, weights, total_weight) =
+          let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
             setup_n_validators_with_keys(n);
-          let set_info = new_test_set_info(&validator_data);
+          let set_info = new_test_set_info(keyed_set.clone());
 
           let reports = random_slash_reports(&mut OsRng, n, num_reports);
           let expected = expected_slash_report(n, &reports);
@@ -908,9 +909,9 @@ mod handle_application_tx {
 
           let set = default_test_validator_set();
 
-          let (keys_addrs, validator_data, validators, weights, total_weight) =
+          let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
             setup_n_validators_with_keys(n);
-          let set_info = new_test_set_info(&validator_data);
+          let set_info = new_test_set_info(keyed_set.clone());
 
           let reports = random_slash_reports(&mut OsRng, n, num_reports);
           let expected = expected_slash_report(n, &reports);
@@ -950,9 +951,9 @@ mod handle_application_tx {
   #[test]
   fn sign() {
     let set = default_test_validator_set();
-    let (keys_addrs, validator_data, validators, weights, total_weight) =
+    let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let (key0, addr0) = keys_addrs[0];
     let (key1, key2) = (keys_addrs[1].0, keys_addrs[2].0);
 
@@ -1013,9 +1014,9 @@ mod handle_application_tx {
   #[test]
   fn sign_share_sends_shares_message() {
     let set = default_test_validator_set();
-    let (keys_addrs, validator_data, validators, weights, total_weight) =
+    let (keyed_set, keys_addrs, _validator_data, validators, weights, total_weight) =
       setup_test_validators_and_weights_with_keys();
-    let set_info = new_test_set_info(&validator_data);
+    let set_info = new_test_set_info(keyed_set.clone());
     let (key0, key1, key2) = (keys_addrs[0].0, keys_addrs[1].0, keys_addrs[2].0);
 
     let sign_id = VariantSignId::Transaction(random_bytes_32(&mut OsRng));
@@ -1085,9 +1086,9 @@ mod handle_application_tx {
 #[test]
 fn handle_block() {
   let set = default_test_validator_set();
-  let (keys_addrs, validator_data, validators, weights, total_weight) =
+  let (keyed_set, keys_addrs, validator_data, validators, weights, total_weight) =
     setup_n_validators_with_keys(3);
-  let set_info = new_test_set_info(&validator_data);
+  let set_info = new_test_set_info(keyed_set.clone());
   let addr0 = validator_data[0].0;
   let signed = new_signed(keys_addrs[0].0);
 

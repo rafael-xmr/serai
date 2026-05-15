@@ -203,17 +203,16 @@ impl<P: KeyGenParams> KeyGen<P> {
     }
 
     match msg {
-      CoordinatorMessage::GenerateKey { session, threshold, evrf_public_keys } => {
+      CoordinatorMessage::GenerateKey { session, tributary_validators } => {
+        let threshold = tributary_validators.threshold();
         log::info!("generating new key, session: {session:?}");
 
         // Unzip the vector of eVRF keys
-        let substrate_evrf_public_keys =
-          evrf_public_keys.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+        let substrate_evrf_public_keys = tributary_validators.substrate_evrf_public_keys();
         let (substrate_evrf_public_keys, mut faulty) =
           coerce_keys::<Ristretto>(&substrate_evrf_public_keys);
 
-        let network_evrf_public_keys =
-          evrf_public_keys.into_iter().map(|(_, key)| key).collect::<Vec<_>>();
+        let network_evrf_public_keys = tributary_validators.network_evrf_public_keys();
         let (network_evrf_public_keys, additional_faulty) =
           coerce_keys::<P::ExternalNetworkCiphersuite>(&network_evrf_public_keys);
         faulty.extend(additional_faulty);

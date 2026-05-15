@@ -6,6 +6,8 @@ mod external_key;
 pub use external_key::*;
 mod embedded_elliptic_curve_keys;
 pub use embedded_elliptic_curve_keys::*;
+mod validator_set;
+pub use validator_set::*;
 
 /// A Ristretto public key.
 ///

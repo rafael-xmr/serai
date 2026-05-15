@@ -26,3 +26,5 @@ serai-db = { path = "../db" }
 
 [features]
 test-helpers = []
+alloc = []
+default = ["alloc"]

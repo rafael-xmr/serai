@@ -38,7 +38,7 @@ async fn new_scan_tributary_task() {
   // Single validator with weight > 1
   {
     let (_, addr) = random_serai_address_and_key(&mut OsRng);
-    let set_info = new_test_set_info(&[(addr, 3)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(addr, 3)]));
     let task = ScanTributaryTask::<MemDb, MockP2p>::new(db.clone(), set_info, tributary.reader());
 
     assert_eq!(task.validators.len(), 1);
@@ -52,7 +52,7 @@ async fn new_scan_tributary_task() {
     let (_, addr1) = random_serai_address_and_key(&mut OsRng);
     let (_, addr2) = random_serai_address_and_key(&mut OsRng);
     let (_, addr3) = random_serai_address_and_key(&mut OsRng);
-    let set_info = new_test_set_info(&[(addr1, 1), (addr2, 2), (addr3, 4)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(addr1, 1), (addr2, 2), (addr3, 4)]));
     let task = ScanTributaryTask::<MemDb, MockP2p>::new(db.clone(), set_info, tributary.reader());
 
     assert_eq!(task.validators.len(), 3);
@@ -65,7 +65,7 @@ async fn new_scan_tributary_task() {
   // Preserves set info
   {
     let (_, addr) = random_serai_address_and_key(&mut OsRng);
-    let set_info = new_test_set_info(&[(addr, 1)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(addr, 1)]));
     let expected_set = set_info.set;
     let task = ScanTributaryTask::<MemDb, MockP2p>::new(db.clone(), set_info, tributary.reader());
 
@@ -126,7 +126,7 @@ fn inject_block(
 #[tokio::test(flavor = "multi_thread")]
 async fn scan_tributary_task_run_iteration() {
   let (_, addr) = random_serai_address_and_key(&mut OsRng);
-  let set_info = new_test_set_info(&[(addr, 1)]);
+  let set_info = new_test_set_info(key_set_from_serai_addresses(&[(addr, 1)]));
 
   // No blocks committed yet: returns false
   {
@@ -225,7 +225,7 @@ async fn scan_tributary_task_run_iteration() {
     txn.del(local_qty_key);
     txn.commit();
 
-    let set_info = new_test_set_info(&[(addr, 1)]);
+    let set_info = new_test_set_info(key_set_from_serai_addresses(&[(addr, 1)]));
     let mut task = ScanTributaryTask::<MemDb, MockP2p>::new(db2, set_info, reader);
     TaskTest::task_runs_and_fails_with(&mut task, "didn't have the provided Transactions").await;
   }

@@ -10,7 +10,7 @@ use ciphersuite::{
     ff::{Field as _, PrimeField, FromUniformBytes},
     GroupEncoding,
   },
-  WrappedGroup, GroupCanonicalEncoding,
+  WrappedGroup, GroupCanonicalEncoding, GroupIo,
 };
 use dalek_ff_group::Ristretto;
 use embedwards25519::Embedwards25519;
@@ -32,6 +32,32 @@ pub enum EmbeddedEllipticCurve {
 }
 #[cfg(feature = "scale")]
 crate::borsh_as_scale!(EmbeddedEllipticCurve);
+
+/// Substrate-facing auxiliary key
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SubstrateAuxiliaryPubKey(pub <Ristretto as WrappedGroup>::G);
+
+impl SubstrateAuxiliaryPubKey {
+  /// Get helper from bytes
+  pub fn from_bytes(
+    bytes: <<Ristretto as WrappedGroup>::G as GroupEncoding>::Repr,
+  ) -> io::Result<Self> {
+    let r = Ristretto::read_G(&mut bytes.as_slice())?;
+    Ok(Self(r))
+  }
+}
+
+impl BorshSerialize for SubstrateAuxiliaryPubKey {
+  fn serialize<W: io::Write>(&self, writer: &mut W) -> Result<(), io::Error> {
+    writer.write_all(self.0.to_bytes().as_ref())
+  }
+}
+impl BorshDeserialize for SubstrateAuxiliaryPubKey {
+  fn deserialize_reader<R: io::Read>(reader: &mut R) -> Result<Self, io::Error> {
+    let key = Ristretto::read_G(reader)?;
+    Ok(Self(key))
+  }
+}
 
 /// Key(s) on embedded elliptic curve(s).
 ///

@@ -9,7 +9,7 @@ use serai_client_serai::{
 use messages::substrate::{InInstructionResult, ExecutedBatch, CoordinatorMessage};
 
 use serai_db::*;
-use serai_task::{ContinuallyRan, RangeProcessor};
+use serai_task::{ContinuallyRan, FuturesRangeProcessor};
 
 use serai_cosign::Cosigning;
 
@@ -64,7 +64,7 @@ impl<D: Db> ContinuallyRan for CanonicalEventStream<D> {
   }
 }
 
-impl<D: Db> RangeProcessor for CanonicalEventStream<D> {
+impl<D: Db> FuturesRangeProcessor for CanonicalEventStream<D> {
   type Item = CanonicalEvents;
   const ITEMS_TO_PROCESS_AT_ONCE: u64 = 10;
 

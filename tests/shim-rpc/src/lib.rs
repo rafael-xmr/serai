@@ -2,7 +2,10 @@
 
 use std::{sync::Arc, net::SocketAddr, env};
 
-use serai_abi::{Block, Event, primitives::BlockHash};
+use serai_abi::{
+  Block, Event,
+  primitives::{address::SeraiAddress, BlockHash},
+};
 use serai_primitives::merkle::IncrementalUnbalancedMerkleTree;
 
 use crate::event_fuzzer::EventFuzzer;
@@ -77,6 +80,31 @@ impl SeraiShimRpc {
     num_blocks: usize,
   ) -> (Vec<(u64, BlockHash)>, Vec<Vec<Event>>, Vec<Block>) {
     let mut fuzzer = EventFuzzer::new();
+    let blocks = fuzzer.generate_blocks(num_blocks);
+    let mut block_hashes = Vec::with_capacity(num_blocks);
+    let mut all_events = Vec::with_capacity(num_blocks);
+    let mut all_blocks = Vec::with_capacity(num_blocks);
+    for (i, events) in blocks.into_iter().enumerate() {
+      let number = u64::try_from(i).unwrap();
+      let (hash, returned_events, block) = self.state.write().await.make_block(number, events);
+      block_hashes.push((number, hash));
+      all_events.push(returned_events);
+      all_blocks.push(block);
+    }
+    (block_hashes, all_events, all_blocks)
+  }
+
+  /// Generate `num_blocks` random blocks using an internal [`EventFuzzer`].
+  /// Returns block hashes paired with block numbers, events per block, and full block objects.
+  ///
+  /// Pass the coordinator's own address in `extra_validators` to allow `in_set` to return true,
+  /// exercising the `NewSet` message path in the coordinator.
+  pub async fn fuzz_blocks_with_validators(
+    &self,
+    num_blocks: usize,
+    extra_validators: &[SeraiAddress],
+  ) -> (Vec<(u64, BlockHash)>, Vec<Vec<Event>>, Vec<Block>) {
+    let mut fuzzer = EventFuzzer::new_with_validators(extra_validators);
     let blocks = fuzzer.generate_blocks(num_blocks);
     let mut block_hashes = Vec::with_capacity(num_blocks);
     let mut all_events = Vec::with_capacity(num_blocks);

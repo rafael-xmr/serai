@@ -8,7 +8,7 @@ use dalek_ff_group::Ristretto;
 
 use tokio::sync::mpsc;
 
-use serai_db::{DbTxn as _, Db as _};
+use serai_db::{DbTxn, Db as _};
 
 use serai_client_serai::abi::primitives::{
   network_id::ExternalNetworkId,
@@ -26,7 +26,7 @@ use serai_coordinator_p2p::P2p;
 use crate::{Db, KeySet};
 
 pub(crate) struct SubstrateTask<P: P2p> {
-  pub(crate) serai_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
+  pub(crate) private_serai_auxiliary_key: Zeroizing<<Ristretto as WrappedGroup>::F>,
   pub(crate) db: Db,
   pub(crate) message_queue: Arc<MessageQueue>,
   pub(crate) p2p: P,
@@ -130,8 +130,7 @@ impl<P: P2p> ContinuallyRan for SubstrateTask<P> {
         // Send GenerateKey to the processor
         let msg = messages::key_gen::CoordinatorMessage::GenerateKey {
           session: new_set.set.session,
-          threshold: new_set.threshold,
-          evrf_public_keys: new_set.evrf_public_keys.clone(),
+          tributary_validators: new_set.tributary_validators.clone(),
         };
         let msg = messages::CoordinatorMessage::from(msg);
         let metadata = Metadata {
@@ -154,7 +153,7 @@ impl<P: P2p> ContinuallyRan for SubstrateTask<P> {
           self.p2p.clone(),
           &self.p2p_add_tributary,
           new_set,
-          self.serai_key.clone(),
+          self.private_serai_auxiliary_key.clone(),
         )
         .await;
 

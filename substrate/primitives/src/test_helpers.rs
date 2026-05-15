@@ -4,10 +4,15 @@ use alloc::{vec, vec::Vec};
 
 use rand_core::{RngCore, CryptoRng};
 
+use ciphersuite::{group::GroupEncoding as _, WrappedGroup};
+use dalek_ff_group::{Ristretto, RistrettoPoint};
+use embedwards25519::Embedwards25519;
+use secq256k1::Secq256k1;
+
 use crate::{
   BlockHash,
-  address::{SeraiAddress, ExternalAddress},
-  crypto::{Public, ExternalKey},
+  address::{ExternalAddress, SeraiAddress},
+  crypto::{EmbeddedEllipticCurveKeys, ExternalKey, Public},
   network_id::ExternalNetworkId,
   validator_sets::{ExternalValidatorSet, Session},
 };
@@ -123,4 +128,49 @@ pub fn random_validator_set<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalVali
 /// A default [`ExternalValidatorSet`] for tests where the set value doesn't matter.
 pub fn default_test_validator_set() -> ExternalValidatorSet {
   ExternalValidatorSet { network: ExternalNetworkId::Bitcoin, session: Session(0) }
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_ristretto_public_key<R: RngCore + CryptoRng>(rng: &mut R) -> RistrettoPoint {
+  <Ristretto as WrappedGroup>::generator() * <Ristretto as WrappedGroup>::F::random(&mut *rng)
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_serai_auxiliary_pubkey<R: RngCore + CryptoRng>(rng: &mut R) -> RistrettoPoint {
+  <Ristretto as WrappedGroup>::generator() * <Ristretto as WrappedGroup>::F::random(&mut *rng)
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_serai_embedded_elliptic_curve_keys<R: RngCore + CryptoRng>(
+  rng: &mut R,
+) -> EmbeddedEllipticCurveKeys {
+  EmbeddedEllipticCurveKeys::Serai(random_serai_auxiliary_pubkey(rng).to_bytes())
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for the given network.
+///
+/// The returned keys are random valid curve points, suitable for DB round-trip tests.
+pub fn random_embedded_elliptic_curve_keys<R: RngCore + CryptoRng>(
+  rng: &mut R,
+  network: ExternalNetworkId,
+) -> EmbeddedEllipticCurveKeys {
+  use ciphersuite::group::ff::Field as _;
+
+  let embedwards_point = (Embedwards25519::generator() *
+    <Embedwards25519 as WrappedGroup>::F::random(&mut *rng))
+  .to_bytes();
+
+  match network {
+    ExternalNetworkId::Bitcoin => {
+      let secq_point =
+        (Secq256k1::generator() * <Secq256k1 as WrappedGroup>::F::random(&mut *rng)).to_bytes();
+      EmbeddedEllipticCurveKeys::Bitcoin(embedwards_point, secq_point)
+    }
+    ExternalNetworkId::Ethereum => {
+      let secq_point =
+        (Secq256k1::generator() * <Secq256k1 as WrappedGroup>::F::random(&mut *rng)).to_bytes();
+      EmbeddedEllipticCurveKeys::Ethereum(embedwards_point, secq_point)
+    }
+    ExternalNetworkId::Monero => EmbeddedEllipticCurveKeys::Monero(embedwards_point),
+  }
 }

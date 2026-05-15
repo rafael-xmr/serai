@@ -1,6 +1,7 @@
 use core::{ops::Deref as _, fmt::Debug};
 use std::io;
 
+use dkg::Participant;
 use zeroize::Zeroizing;
 use rand_core::{RngCore, CryptoRng};
 
@@ -14,7 +15,7 @@ use schnorr::SchnorrSignature;
 
 use borsh::{BorshSerialize, BorshDeserialize};
 
-use serai_primitives::{BlockHash, validator_sets::KeyShares, address::SeraiAddress};
+use serai_primitives::{BlockHash, validator_sets::KeyShares};
 
 use messages::sign::VariantSignId;
 
@@ -112,7 +113,7 @@ pub enum Transaction {
   /// A vote to remove a participant for invalid behavior
   RemoveParticipant {
     /// The participant to remove
-    participant: SeraiAddress,
+    participant: Participant,
     /// The transaction's signer and signature
     signed: Signed,
   },

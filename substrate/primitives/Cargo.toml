@@ -16,6 +16,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 workspace = true
 
 [dependencies]
+std-shims = { path = "../../common/std-shims", version = "0.1.1", default-features = false }
+
 rand_core = { version = "0.6", default-features = false }
 
 zeroize = { version = "^1.5", features = ["derive"] }

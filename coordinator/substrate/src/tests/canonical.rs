@@ -1,28 +1,25 @@
+use std::collections::HashMap;
 use futures::FutureExt as _;
 use rand::RngCore as _;
 use rand_core::OsRng;
 use serai_cosign::Cosigning;
-use serai_db::{Db as _, DbTxn as _, MemDb};
 use serai_primitives::{
   test_helpers::{random_global_session, random_external_network_id},
   validator_sets::Session,
   instructions::OutInstructionWithBalance,
 };
-use serai_task::{RangeProcessor as _, impl_serai_task_test_struct, test_helpers::IntoShimSerai};
+use serai_task::{FuturesRangeProcessor as _, test_helpers::IntoShimSerai};
 use serai_shim_rpc::event_generator::in_instructions_events;
 
 use serai_abi::{Block, Event, validator_sets::ReportedSlashes};
 use serai_client_serai::{
   Serai,
-  abi::{
-    self,
-    primitives::{BlockHash, network_id::ExternalNetworkId},
-  },
+  abi::{self, primitives::network_id::ExternalNetworkId},
 };
 
 use crate::{
   Canonical,
-  canonical::{CanonicalEventStream, ScanCanonicalBlocksFrom},
+  canonical::{CanonicalEventStream, ScanCanonicalBlocksFrom, last_indexed_batch_id},
 };
 use super::*;
 
@@ -33,7 +30,7 @@ struct CanonicalTestStruct {
   db: MemDb,
 }
 
-impl_serai_task_test_struct!(CanonicalTestStruct);
+serai_task::impl_serai_task_test_struct!(CanonicalTestStruct);
 
 impl IntoTask for CanonicalTestStruct {
   type Task = CanonicalEventStream<MemDb>;
@@ -45,25 +42,11 @@ impl IntoTask for CanonicalTestStruct {
 
 impl IntoShimSerai for CanonicalTestStruct {}
 
-/// Populate the cosigning DB so that `Cosigning::latest_cosigned_block_number` returns
-/// the max block number and `Cosigning::cosigned_block(n)` returns the correct hash
-/// for each block in the list.
-fn seed_cosigned_blocks(db: &mut MemDb, block_hashes: &[(u64, BlockHash)]) {
-  let mut txn = db.txn();
-  for &(number, hash) in block_hashes {
-    serai_cosign::test_utils::set_substrate_block_hash(&mut txn, number, &hash);
-  }
-  if let Some(&(max_number, _)) = block_hashes.last() {
-    serai_cosign::test_utils::set_latest_cosigned_block_number(&mut txn, max_number);
-  }
-  txn.commit();
-}
-
 fn verify_db_invariants_for_network_and_events(
   db: &mut MemDb,
   networks: Option<Vec<ExternalNetworkId>>,
-  events: &Vec<Vec<Event>>,
-  blocks: &Vec<Block>,
+  events: &[Vec<Event>],
+  blocks: &[Block],
 ) {
   let num_blocks = events.len();
   if num_blocks > 0 {
@@ -81,12 +64,13 @@ fn verify_db_invariants_for_network_and_events(
   }
 
   let mut txn = db.txn();
+  let mut last_batch_ids = HashMap::new();
 
   // For each network, start asserting every one of its sent messages
   // messages are stored as a queue per network, every event added
   // is stored one after the other
   for network in &networks.unwrap_or_else(|| ExternalNetworkId::all().collect()) {
-    let mut get_next_msg = || Canonical::try_recv(&mut txn, *network);
+    let get_next_msg = |txn: &mut _| Canonical::try_recv(txn, *network);
 
     // For all events in all blocks find the ones for the current network
     for (block_number, block_events) in events.iter().enumerate() {
@@ -98,18 +82,18 @@ fn verify_db_invariants_for_network_and_events(
       let mut burns = Vec::new();
 
       for event in block_events {
+        #[expect(clippy::wildcard_enum_match_arm)]
         match event {
+          #[expect(clippy::wildcard_enum_match_arm)]
           serai_abi::Event::ValidatorSets(vset_event) => match vset_event {
             abi::validator_sets::Event::SetKeys { set, .. } => {
               if &set.network == network {
                 set_keys_events.push(vset_event);
               }
             }
-            abi::validator_sets::Event::Slashes(reported_slashes) => {
-              if let ReportedSlashes::ExternalValidatorSet(set) = reported_slashes {
-                if &set.network == network {
-                  slashes_events.push(vset_event);
-                }
+            abi::validator_sets::Event::Slashes(ReportedSlashes::ExternalValidatorSet(set)) => {
+              if &set.network == network {
+                slashes_events.push(vset_event);
               }
             }
             _ => {}
@@ -141,7 +125,7 @@ fn verify_db_invariants_for_network_and_events(
         };
 
         if let Some(CoordinatorMessage::SetKeys { serai_time, session, key_pair: msg_key_pair }) =
-          get_next_msg()
+          get_next_msg(&mut txn)
         {
           assert_eq!(serai_time, expected_serai_time);
           assert_eq!(session, set.session);
@@ -154,7 +138,7 @@ fn verify_db_invariants_for_network_and_events(
           unreachable!("`SetKeys` event wasn't a `SetKeys` event: {slash_event:?}");
         };
 
-        if let Some(CoordinatorMessage::SlashesReported { session }) = get_next_msg() {
+        if let Some(CoordinatorMessage::SlashesReported { session }) = get_next_msg(&mut txn) {
           match reported_slashes {
             ReportedSlashes::SeraiValidator(_) => {}
             ReportedSlashes::ExternalValidatorSet(set) => {
@@ -165,7 +149,7 @@ fn verify_db_invariants_for_network_and_events(
       }
 
       if batch_event.is_some() || !burns.is_empty() {
-        if let Some(msg) = get_next_msg() {
+        if let Some(msg) = get_next_msg(&mut txn) {
           let CoordinatorMessage::Block {
             serai_block_number,
             batch: ref msg_batch,
@@ -175,7 +159,8 @@ fn verify_db_invariants_for_network_and_events(
             panic!("");
           };
           assert_eq!(
-            serai_block_number, block_number as u64,
+            serai_block_number,
+            u64::try_from(block_number).unwrap(),
             "Block number mismatch for {network:?}"
           );
           let expected_batch = batch_event.map(|be| {
@@ -187,6 +172,7 @@ fn verify_db_invariants_for_network_and_events(
               in_instruction_results,
               ..
             } = be;
+            last_batch_ids.insert(*network, *id);
             ExecutedBatch {
               id: *id,
               publisher: *publishing_session,
@@ -232,9 +218,14 @@ fn verify_db_invariants_for_network_and_events(
       }
     }
 
+    assert_eq!(
+      &last_indexed_batch_id(&txn, *network).unwrap_or(0),
+      last_batch_ids.get(network).unwrap_or(&0)
+    );
+
     // Iterated over all events on all blocks for this network
     // Message queue should be empty, next message is None
-    assert!(get_next_msg().is_none());
+    assert!(get_next_msg(&mut txn).is_none());
   }
 
   // `txn` is dropped here without `.commit()`. The channel is left unchanged.
@@ -254,7 +245,7 @@ mod errors {
     seed_cosigned_blocks(&mut task_test.db, &block_hashes);
     {
       let mut txn = task_test.db.txn();
-      serai_cosign::test_utils::set_faulted_session(&mut txn, random_global_session(&mut OsRng));
+      serai_cosign::test_helpers::set_faulted_session(&mut txn, random_global_session(&mut OsRng));
       txn.commit();
     }
 
@@ -264,7 +255,7 @@ mod errors {
       TaskTest::task_runs_and_fails_with(&mut task, "Error getting latest cosigned block number")
         .await;
     }
-    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &vec![], &vec![]);
+    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &[], &[]);
   }
 
   #[tokio::test]
@@ -284,8 +275,8 @@ mod errors {
     // Delete the seeded block so cosigned_block(n) returns Ok(None)
     {
       let mut txn = task_test.db.txn();
-      serai_cosign::test_utils::del_substrate_block_hash(&mut txn, 0);
-      serai_cosign::test_utils::del_latest_cosigned_block_number(&mut txn);
+      serai_cosign::test_helpers::del_substrate_block_hash(&mut txn, 0);
+      serai_cosign::test_helpers::del_latest_cosigned_block_number(&mut txn);
       txn.commit();
     }
 
@@ -349,7 +340,7 @@ mod errors {
     // Inject the fault into the shared DB after run_iteration is called, simulating the race
     {
       let mut txn = task_test.db.txn();
-      serai_cosign::test_utils::set_faulted_session(&mut txn, random_global_session(&mut OsRng));
+      serai_cosign::test_helpers::set_faulted_session(&mut txn, random_global_session(&mut OsRng));
       txn.commit();
     }
 
@@ -366,7 +357,7 @@ mod errors {
       TaskTest::task_runs_and_fails_with(&mut task, "Error getting latest cosigned block number")
         .await;
     }
-    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &vec![], &vec![]);
+    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &[], &[]);
   }
 
   #[tokio::test]
@@ -387,8 +378,8 @@ mod errors {
     verify_db_invariants_for_network_and_events(
       &mut task_test.db,
       None,
-      &vec![block0_events],
-      &vec![block0_block],
+      &[block0_events],
+      &[block0_block],
     );
 
     shim.clear_all_errors().await;
@@ -402,7 +393,7 @@ mod errors {
   }
 
   #[tokio::test]
-  async fn panics_on_cosigned_block_none_from_serai() {
+  async fn panics_on_serai_block_none_from_serai() {
     let (shim, mut task_test) = CanonicalTestStruct::setup_mock_test().await;
     let (block_hashes, _, _) = shim.fuzz_blocks(1).await;
     seed_cosigned_blocks(&mut task_test.db, &block_hashes);
@@ -438,8 +429,8 @@ mod errors {
     verify_db_invariants_for_network_and_events(
       &mut task_test.db,
       None,
-      &vec![block1_events],
-      &vec![block1_block],
+      &[block1_events],
+      &[block1_block],
     );
 
     shim.clear_all_errors().await;
@@ -594,7 +585,7 @@ async fn processes_cosigned_blocks() {
     {
       TaskTest::task_runs_once_and_matches_progress(&mut task, false).await;
     }
-    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &vec![], &vec![]);
+    verify_db_invariants_for_network_and_events(&mut task_test.db, None, &[], &[]);
   }
 
   // Returns made_progress = true with one or more cosigned blocks

@@ -514,7 +514,7 @@ mod tributary_db {
     fn default_accumulate_setup(
     ) -> (ExternalValidatorSet, SeraiAddress, Vec<SeraiAddress>, u16, u16) {
       let set = random_validator_set(&mut OsRng);
-      let (_, _, validators, _, total_weight) = setup_test_validators_and_weights_with_keys();
+      let (_, _, _, validators, _, total_weight) = setup_test_validators_and_weights_with_keys();
       let validator = validators[0];
       let validator_weight = 1;
       (set, validator, validators, total_weight, validator_weight)

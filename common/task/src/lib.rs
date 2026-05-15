@@ -167,13 +167,13 @@ pub trait ContinuallyRan: Sized + Send {
   }
 }
 
-/// A trait for processing a range of items with a prefetch pipeline.
+/// A trait for processing a range of futures with a prefetch pipeline.
 ///
 /// Implementors define how to fetch a single item ([`fetch_item`]) and how to process it
 /// ([`process_item`]). The provided [`process_range`] method handles the pipeline: it prefetches
 /// [`ITEMS_TO_PROCESS_AT_ONCE`] items ahead using `FuturesOrdered` to minimize RPC latency,
 /// then processes each item in order to increase throughput.
-pub trait RangeProcessor: ContinuallyRan {
+pub trait FuturesRangeProcessor: ContinuallyRan {
   /// The decoded data for a single item, produced by [`fetch_item`] and consumed by
   /// [`process_item`].
   type Item: Send;
