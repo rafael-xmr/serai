@@ -1,6 +1,7 @@
 use core::{ops::Deref as _, fmt::Debug};
 use std::io;
 
+use dkg::Participant;
 use zeroize::Zeroizing;
 use rand_core::{RngCore, CryptoRng};
 
@@ -14,7 +15,7 @@ use schnorr::SchnorrSignature;
 
 use borsh::{BorshSerialize, BorshDeserialize};
 
-use serai_primitives::{BlockHash, validator_sets::KeyShares, address::SeraiAddress};
+use serai_primitives::{BlockHash, validator_sets::KeyShares};
 
 use messages::sign::VariantSignId;
 
@@ -77,8 +78,8 @@ impl Signed {
   }
 
   /// Provide a nonce to convert a `Signed` into a `tributary::Signed`.
-  pub(crate) fn to_tributary_signed(self, nonce: u32) -> TributarySigned {
-    TributarySigned { signer: self.signer, nonce, signature: self.signature }
+  pub(crate) fn to_tributary_signed(self, round: SigningProtocolRound) -> TributarySigned {
+    TributarySigned { signer: self.signer, nonce: round.nonce(), signature: self.signature }
   }
 }
 
@@ -104,7 +105,7 @@ pub enum Transaction {
   /// A vote to remove a participant for invalid behavior
   RemoveParticipant {
     /// The participant to remove
-    participant: SeraiAddress,
+    participant: Participant,
     /// The transaction's signer and signature
     signed: Signed,
   },
@@ -233,7 +234,7 @@ pub enum Transaction {
 
 impl ReadWrite for Transaction {
   fn read<R: io::Read>(reader: &mut R) -> io::Result<Self> {
-    Self::deserialize_reader(reader)
+    borsh::BorshDeserialize::deserialize_reader(reader)
   }
 
   fn write<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
@@ -243,23 +244,24 @@ impl ReadWrite for Transaction {
 
 impl TransactionTrait for Transaction {
   fn kind(&self) -> TransactionKind {
+    #[expect(clippy::match_same_arms)]
     match self {
       Transaction::RemoveParticipant { participant, signed } => TransactionKind::Signed(
         borsh::to_vec(&(b"RemoveParticipant".as_slice(), participant)).unwrap(),
-        signed.to_tributary_signed(0),
+        signed.to_tributary_signed(SigningProtocolRound::Preprocess),
       ),
 
       Transaction::DkgParticipation { signed, .. } => TransactionKind::Signed(
         borsh::to_vec(b"DkgParticipation".as_slice()).unwrap(),
-        signed.to_tributary_signed(0),
+        signed.to_tributary_signed(SigningProtocolRound::Preprocess),
       ),
       Transaction::DkgConfirmationPreprocess { attempt, signed, .. } => TransactionKind::Signed(
         borsh::to_vec(&(b"DkgConfirmation".as_slice(), attempt)).unwrap(),
-        signed.to_tributary_signed(SigningProtocolRound::Preprocess.nonce()),
+        signed.to_tributary_signed(SigningProtocolRound::Share),
       ),
       Transaction::DkgConfirmationShare { attempt, signed, .. } => TransactionKind::Signed(
         borsh::to_vec(&(b"DkgConfirmation".as_slice(), attempt)).unwrap(),
-        signed.to_tributary_signed(SigningProtocolRound::Share.nonce()),
+        signed.to_tributary_signed(SigningProtocolRound::Share),
       ),
 
       Transaction::Cosign { .. } => TransactionKind::Provided("Cosign"),
@@ -269,12 +271,12 @@ impl TransactionTrait for Transaction {
 
       Transaction::Sign { id, attempt, round, signed, .. } => TransactionKind::Signed(
         borsh::to_vec(&(b"Sign".as_slice(), id, attempt)).unwrap(),
-        signed.to_tributary_signed(round.nonce()),
+        signed.to_tributary_signed(*round),
       ),
 
       Transaction::SlashReport { signed, .. } => TransactionKind::Signed(
         borsh::to_vec(b"SlashReport".as_slice()).unwrap(),
-        signed.to_tributary_signed(0),
+        signed.to_tributary_signed(SigningProtocolRound::Preprocess),
       ),
     }
   }

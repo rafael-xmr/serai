@@ -111,7 +111,7 @@ mod intake_cosign_error {
 #[tokio::test]
 async fn spawn_end_to_end() {
   let db = MemDb::new();
-  let (shim_serai, serai) = setup_shim_serai().await;
+  let (shim_serai, serai) = serai_shim_rpc::SeraiShimRpc::setup_shim_serai().await;
   let (request, _calls) = TestRequest::new(false);
 
   /// Create a trivial task that logs and sets a flag when triggered whose handle is passed to the

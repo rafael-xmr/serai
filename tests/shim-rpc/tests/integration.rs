@@ -94,7 +94,7 @@ async fn test_dynamic_block_addition() {
   let latest = serai.latest_finalized_block_number().await.unwrap();
   assert_eq!(latest, 0, "initially no blocks should exist");
 
-  let hash = shim.make_block(1, vec![vec![]]).await;
+  let hash = shim.make_block(1, vec![vec![]]).await.0;
 
   let latest = serai.latest_finalized_block_number().await.unwrap();
   assert_eq!(latest, 1, "should have 1 block after adding one");

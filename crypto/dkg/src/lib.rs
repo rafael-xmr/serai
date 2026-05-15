@@ -8,6 +8,8 @@ use core::{
 };
 use std_shims::{prelude::*, sync::Arc, collections::HashMap, io};
 
+use borsh::{BorshSerialize, BorshDeserialize};
+
 use zeroize::{Zeroize, Zeroizing};
 
 use ciphersuite::{
@@ -19,7 +21,19 @@ use ciphersuite::{
 };
 
 /// The ID of a participant, defined as a non-zero u16.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Zeroize)]
+#[derive(
+  Clone,
+  Copy,
+  PartialEq,
+  Eq,
+  PartialOrd,
+  Ord,
+  Hash,
+  Debug,
+  Zeroize,
+  BorshSerialize,
+  BorshDeserialize,
+)]
 pub struct Participant(u16);
 impl Participant {
   /// Create a new Participant identifier from a u16.

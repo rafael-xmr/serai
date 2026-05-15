@@ -73,7 +73,7 @@ impl ErrorInjection {
 pub struct ShimState {
   pub blocks_by_number: HashMap<u64, Block>,
   pub block_number_by_hash: HashMap<BlockHash, u64>,
-  pub events_by_hash: HashMap<BlockHash, Vec<Vec<Event>>>,
+  pub events_by_hash: HashMap<BlockHash, Vec<Event>>,
   pub builds_upon: IncrementalUnbalancedMerkleTree,
   pub published_transactions: Vec<Vec<u8>>,
   pub default_validator_sets: ValidatorSetsState,
@@ -101,7 +101,11 @@ impl Default for ShimState {
 
 impl ShimState {
   /// Construct a block and register it.
-  pub fn make_block(&mut self, number: u64, events: Vec<Vec<Event>>) -> BlockHash {
+  pub fn make_block(
+    &mut self,
+    number: u64,
+    events: Vec<Vec<Event>>,
+  ) -> (BlockHash, Vec<Event>, Block) {
     let block = Block {
       header: Header::V1(HeaderV1 {
         number,
@@ -126,11 +130,12 @@ impl ShimState {
       Blake2b256::new_with_prefix([BLOCK_LEAF_TAG]).chain_update(block_hash.0).finalize().into(),
     );
 
+    let events: Vec<Event> = events.into_iter().flatten().collect();
     self.block_number_by_hash.insert(block_hash, number);
-    self.blocks_by_number.insert(number, block);
-    self.events_by_hash.insert(block_hash, events);
+    self.blocks_by_number.insert(number, block.clone());
+    self.events_by_hash.insert(block_hash, events.clone());
 
-    block_hash
+    (block_hash, events, block)
   }
 
   /// The latest finalized block number.
@@ -143,7 +148,11 @@ impl ShimState {
   ///
   /// Unlike [`Self::make_block`], this does **not** advance the internal
   /// `builds_upon` state, so subsequent calls to `make_block` remain valid.
-  pub fn make_non_linear_block(&mut self, number: u64, events: Vec<Vec<Event>>) -> BlockHash {
+  pub fn make_non_linear_block(
+    &mut self,
+    number: u64,
+    events: Vec<Vec<Event>>,
+  ) -> (BlockHash, Vec<Event>, Block) {
     let block = Block {
       header: Header::V1(HeaderV1 {
         number,
@@ -162,12 +171,13 @@ impl ShimState {
 
     let block_hash = block.header.hash();
 
+    let events: Vec<Event> = events.into_iter().flatten().collect();
     // Register the block but do not update builds_upon
     self.block_number_by_hash.insert(block_hash, number);
-    self.blocks_by_number.insert(number, block);
-    self.events_by_hash.insert(block_hash, events);
+    self.blocks_by_number.insert(number, block.clone());
+    self.events_by_hash.insert(block_hash, events.clone());
 
-    block_hash
+    (block_hash, events, block)
   }
 
   /// Remove a block from all maps.

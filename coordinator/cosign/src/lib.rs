@@ -12,7 +12,11 @@ use borsh::{BorshSerialize, BorshDeserialize};
 
 use serai_client_serai::{
   abi::primitives::{
-    BlockHash, crypto::Public, network_id::ExternalNetworkId, validator_sets::ExternalValidatorSet,
+    BlockHash,
+    crypto::{Public, EmbeddedEllipticCurveKeys as AuxiliaryKeysStruct},
+    network_id::ExternalNetworkId,
+    validator_sets::ExternalValidatorSet,
+    address::SeraiAddress,
   },
   Serai,
 };
@@ -24,6 +28,20 @@ pub use serai_cosign_types::*;
 
 /// The cosigns which are intended to be performed.
 mod intend;
+
+/// The channel for new set events emitted by an ephemeral event stream.
+pub struct AuxiliaryKeys;
+impl AuxiliaryKeys {
+  /// Try to receive a new set's information, returning `None` if there is none to receive.
+  pub fn get(
+    getter: &impl Get,
+    network: ExternalNetworkId,
+    validator: SeraiAddress,
+  ) -> Option<AuxiliaryKeysStruct> {
+    intend::AuxiliaryKeys::get(getter, network.into(), validator)
+  }
+}
+
 /// The evaluator of the cosigns.
 mod evaluator;
 /// The task to delay acknowledgement of the cosigns.
@@ -162,6 +180,10 @@ create_db! {
     FaultedSession: () -> [u8; 32],
   }
 }
+
+/// Utilities for seeding the cosign DB in tests and test-helper contexts.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_helpers;
 
 /// An object usable to request notable cosigns for a block.
 pub trait RequestNotableCosigns: 'static + Send + Sync {

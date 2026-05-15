@@ -1,16 +1,20 @@
 //! Test helpers for generating random instances of primitive types.
 
-use core::ops::{Bound, RangeBounds};
 use alloc::{vec, vec::Vec};
 
 use rand_core::{RngCore, CryptoRng};
 
+use ciphersuite::{group::GroupEncoding as _, WrappedGroup};
+use dalek_ff_group::{Ristretto, RistrettoPoint};
+use embedwards25519::Embedwards25519;
+use secq256k1::Secq256k1;
+
 use crate::{
   BlockHash,
-  address::{SeraiAddress, ExternalAddress},
-  crypto::{Public, ExternalKey},
+  address::{ExternalAddress, SeraiAddress},
+  crypto::{EmbeddedEllipticCurveKeys, ExternalKey, Public},
   network_id::ExternalNetworkId,
-  validator_sets::{Session, ExternalValidatorSet},
+  validator_sets::{ExternalValidatorSet, Session},
 };
 
 /// Generate a random byte array.
@@ -41,6 +45,19 @@ pub fn random_vec_u8<R: RngCore + CryptoRng>(rng: &mut R, len: impl RangeBounds<
     inclusive_start + i
   };
 
+  let mut bytes = vec![0u8; len];
+  rng.fill_bytes(&mut bytes);
+  bytes
+}
+
+/// Generate a random `Vec<u8>` with a random length between 1 and 128.
+pub fn random_vec_u8<R: RngCore + CryptoRng>(rng: &mut R) -> Vec<u8> {
+  let len = usize::try_from(rng.next_u32() % 128).unwrap() + 1;
+  random_vec_of_len(rng, len)
+}
+
+/// Generate a random byte vector of a specific length.
+pub fn random_vec_of_len<R: RngCore + CryptoRng>(rng: &mut R, len: usize) -> Vec<u8> {
   let mut bytes = vec![0u8; len];
   rng.fill_bytes(&mut bytes);
   bytes
@@ -120,5 +137,84 @@ pub fn random_validator_set<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalVali
   ExternalValidatorSet {
     network: random_external_network_id(rng),
     session: Session(rng.next_u32()),
+  }
+}
+
+/// Generate a random global session ID (`[u8; 32]`).
+pub fn random_global_session<R: RngCore + CryptoRng>(rng: &mut R) -> [u8; 32] {
+  random_bytes_32(rng)
+}
+
+/// Generate a random genesis
+pub fn random_genesis<R: RngCore + CryptoRng>(rng: &mut R) -> [u8; 32] {
+  random_bytes_32(rng)
+}
+
+/// Generate a random block number.
+pub fn random_block_number<R: RngCore + CryptoRng>(rng: &mut R) -> u64 {
+  rng.next_u64()
+}
+
+/// Generate a random [`ExternalNetworkId`].
+pub fn random_external_network_id<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalNetworkId {
+  let all: Vec<_> = ExternalNetworkId::all().collect();
+  all[usize::try_from(rng.next_u32()).unwrap() % all.len()]
+}
+
+/// Generate a random [`ExternalValidatorSet`].
+pub fn random_validator_set<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalValidatorSet {
+  ExternalValidatorSet {
+    network: random_external_network_id(rng),
+    session: Session(rng.next_u32()),
+  }
+}
+
+/// A default [`ExternalValidatorSet`] for tests where the set value doesn't matter.
+pub fn default_test_validator_set() -> ExternalValidatorSet {
+  ExternalValidatorSet { network: ExternalNetworkId::Bitcoin, session: Session(0) }
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_ristretto_public_key<R: RngCore + CryptoRng>(rng: &mut R) -> RistrettoPoint {
+  <Ristretto as WrappedGroup>::generator() * <Ristretto as WrappedGroup>::F::random(&mut *rng)
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_serai_auxiliary_pubkey<R: RngCore + CryptoRng>(rng: &mut R) -> RistrettoPoint {
+  <Ristretto as WrappedGroup>::generator() * <Ristretto as WrappedGroup>::F::random(&mut *rng)
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for `NetworkId::Serai`.
+pub fn random_serai_embedded_elliptic_curve_keys<R: RngCore + CryptoRng>(
+  rng: &mut R,
+) -> EmbeddedEllipticCurveKeys {
+  EmbeddedEllipticCurveKeys::Serai(random_serai_auxiliary_pubkey(rng).to_bytes())
+}
+
+/// Generate a random [`EmbeddedEllipticCurveKeys`] for the given network.
+///
+/// The returned keys are random valid curve points, suitable for DB round-trip tests.
+pub fn random_embedded_elliptic_curve_keys<R: RngCore + CryptoRng>(
+  rng: &mut R,
+  network: ExternalNetworkId,
+) -> EmbeddedEllipticCurveKeys {
+  use ciphersuite::group::ff::Field as _;
+
+  let embedwards_point = (Embedwards25519::generator() *
+    <Embedwards25519 as WrappedGroup>::F::random(&mut *rng))
+  .to_bytes();
+
+  match network {
+    ExternalNetworkId::Bitcoin => {
+      let secq_point =
+        (Secq256k1::generator() * <Secq256k1 as WrappedGroup>::F::random(&mut *rng)).to_bytes();
+      EmbeddedEllipticCurveKeys::Bitcoin(embedwards_point, secq_point)
+    }
+    ExternalNetworkId::Ethereum => {
+      let secq_point =
+        (Secq256k1::generator() * <Secq256k1 as WrappedGroup>::F::random(&mut *rng)).to_bytes();
+      EmbeddedEllipticCurveKeys::Ethereum(embedwards_point, secq_point)
+    }
+    ExternalNetworkId::Monero => EmbeddedEllipticCurveKeys::Monero(embedwards_point),
   }
 }

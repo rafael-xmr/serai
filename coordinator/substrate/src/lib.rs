@@ -3,15 +3,7 @@
 #![deny(missing_docs)]
 #![allow(clippy::std_instead_of_alloc, clippy::std_instead_of_core)]
 
-use std::collections::HashMap;
-
 use borsh::{BorshSerialize, BorshDeserialize};
-
-use blake2::{
-  digest::{typenum::U32, Digest as _},
-  Blake2b,
-};
-use dkg::Participant;
 
 use serai_client_serai::abi::{
   primitives::{
@@ -19,7 +11,6 @@ use serai_client_serai::abi::{
     network_id::ExternalNetworkId,
     validator_sets::{Session, ExternalValidatorSet, KeyShares, SlashReport},
     crypto::{Signature, KeyPair},
-    address::SeraiAddress,
     instructions::SignedBatch,
   },
   Transaction,
@@ -34,15 +25,23 @@ mod ephemeral;
 pub use ephemeral::EphemeralEventStream;
 
 mod set_keys;
+use serai_primitives::crypto::TributaryValidatorSet;
 pub use set_keys::SetKeysTask;
 mod publish_batch;
 pub use publish_batch::PublishBatchTask;
 mod publish_slash_report;
 pub use publish_slash_report::PublishSlashReportTask;
 
+/// Test helpers and fixtures.
+#[cfg(test)]
+pub mod tests;
+
+#[cfg(any(test, feature = "test-helpers"))]
+/// Test helpers and fixtures.
+pub mod test_helpers;
+
 /// The information for a new set.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
-#[borsh(init = init_participant_indexes)]
 pub struct NewSetInformation {
   /// The set.
   pub set: ExternalValidatorSet,
@@ -50,63 +49,10 @@ pub struct NewSetInformation {
   pub serai_block: [u8; 32],
   /// The time of the block which declared it, in seconds since the epoch.
   pub declaration_time: u64,
-  /// The threshold to use.
-  pub threshold: u16,
-  /// The validators, with the amount of key shares they have.
-  pub validators: Vec<(SeraiAddress, u16)>,
-  /// The eVRF public keys.
-  ///
-  /// This will have the necessary copies of the keys proper for each validator's weight,
-  /// accordingly syncing up with `participant_indexes`.
-  pub evrf_public_keys: Vec<([u8; 32], Vec<u8>)>,
-  /// The participant indexes, indexed by their validator.
-  #[borsh(skip)]
-  pub participant_indexes: HashMap<SeraiAddress, Vec<Participant>>,
-  /// The validators, indexed by their participant indexes.
-  #[borsh(skip)]
-  pub participant_indexes_reverse_lookup: HashMap<Participant, SeraiAddress>,
-}
-
-impl NewSetInformation {
-  fn init_participant_indexes(&mut self) {
-    let mut next_i = 1;
-    self.participant_indexes = HashMap::with_capacity(self.validators.len());
-    self.participant_indexes_reverse_lookup = HashMap::with_capacity(self.validators.len());
-    for (validator, weight) in &self.validators {
-      let mut these_is = Vec::with_capacity((*weight).into());
-      for _ in 0 .. *weight {
-        let this_i = Participant::new(next_i).unwrap();
-        next_i += 1;
-
-        these_is.push(this_i);
-        self.participant_indexes_reverse_lookup.insert(this_i, *validator);
-      }
-      self.participant_indexes.insert(*validator, these_is);
-    }
-  }
-
-  /// Create a new [`NewSetInformation`].
-  pub fn new(
-    set: ExternalValidatorSet,
-    serai_block: [u8; 32],
-    declaration_time: u64,
-    threshold: u16,
-    validators: Vec<(SeraiAddress, u16)>,
-    evrf_public_keys: Vec<([u8; 32], Vec<u8>)>,
-  ) -> Self {
-    let mut result = Self {
-      set,
-      serai_block,
-      declaration_time,
-      threshold,
-      validators,
-      evrf_public_keys,
-      participant_indexes: Default::default(),
-      participant_indexes_reverse_lookup: Default::default(),
-    };
-    result.init_participant_indexes();
-    result
-  }
+  /// The structure of validators viewed by the coordinator and processor perspectives
+  /// Each entry contains auxiliary keys (substrate and network) with weight.
+  /// Accordingly syncs up participant indexes and reverse lookup fields.
+  pub tributary_validators: TributaryValidatorSet,
 }
 
 impl NewSetInformation {

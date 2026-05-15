@@ -3,9 +3,12 @@
 use std::{sync::Arc, net::SocketAddr, env};
 
 use serai_abi::{
-  primitives::{BlockHash, merkle::IncrementalUnbalancedMerkleTree},
-  Event,
+  Block, Event,
+  primitives::{address::SeraiAddress, BlockHash},
 };
+use serai_primitives::merkle::IncrementalUnbalancedMerkleTree;
+
+use crate::event_fuzzer::EventFuzzer;
 
 use jsonrpsee::server::{ServerBuilder, ServerHandle};
 use tokio::sync::RwLock;
@@ -16,6 +19,7 @@ pub mod builder;
 pub mod test_helpers;
 
 pub mod event_fuzzer;
+pub mod event_generator;
 
 pub use state::*;
 pub use builder::SeraiShimRpcBuilder;
@@ -48,6 +52,12 @@ impl SeraiShimRpc {
     Self { url: format!("http://{addr}"), state, _handle: server.start(rpc_module) }
   }
 
+  pub async fn setup_shim_serai() -> (SeraiShimRpc, Arc<serai_client_serai::Serai>) {
+    let shim_serai = SeraiShimRpc::start(ShimState::default()).await;
+    let serai = Arc::new(serai_client_serai::Serai::new(shim_serai.url()).unwrap());
+    (shim_serai, serai)
+  }
+
   /// The HTTP URL this shim is listening on.
   pub fn url(&self) -> String {
     self.url.clone()
@@ -55,14 +65,67 @@ impl SeraiShimRpc {
 
   /// Create a block at the given number with events.
   /// Returns the hash of the newly created block.
-  pub async fn make_block(&self, number: u64, events: Vec<Vec<Event>>) -> BlockHash {
+  pub async fn make_block(
+    &self,
+    number: u64,
+    events: Vec<Vec<Event>>,
+  ) -> (BlockHash, Vec<Event>, Block) {
     self.state.write().await.make_block(number, events)
+  }
+
+  /// Generate `num_blocks` random blocks using an internal [`EventFuzzer`].
+  /// Returns block hashes paired with block numbers, events per block, and full block objects.
+  pub async fn fuzz_blocks(
+    &self,
+    num_blocks: usize,
+  ) -> (Vec<(u64, BlockHash)>, Vec<Vec<Event>>, Vec<Block>) {
+    let mut fuzzer = EventFuzzer::new();
+    let blocks = fuzzer.generate_blocks(num_blocks);
+    let mut block_hashes = Vec::with_capacity(num_blocks);
+    let mut all_events = Vec::with_capacity(num_blocks);
+    let mut all_blocks = Vec::with_capacity(num_blocks);
+    for (i, events) in blocks.into_iter().enumerate() {
+      let number = u64::try_from(i).unwrap();
+      let (hash, returned_events, block) = self.state.write().await.make_block(number, events);
+      block_hashes.push((number, hash));
+      all_events.push(returned_events);
+      all_blocks.push(block);
+    }
+    (block_hashes, all_events, all_blocks)
+  }
+
+  /// Generate `num_blocks` random blocks using an internal [`EventFuzzer`].
+  /// Returns block hashes paired with block numbers, events per block, and full block objects.
+  ///
+  /// Pass the coordinator's own address in `extra_validators` to allow `in_set` to return true,
+  /// exercising the `NewSet` message path in the coordinator.
+  pub async fn fuzz_blocks_with_validators(
+    &self,
+    num_blocks: usize,
+    extra_validators: &[SeraiAddress],
+  ) -> (Vec<(u64, BlockHash)>, Vec<Vec<Event>>, Vec<Block>) {
+    let mut fuzzer = EventFuzzer::new_with_validators(extra_validators);
+    let blocks = fuzzer.generate_blocks(num_blocks);
+    let mut block_hashes = Vec::with_capacity(num_blocks);
+    let mut all_events = Vec::with_capacity(num_blocks);
+    let mut all_blocks = Vec::with_capacity(num_blocks);
+    for (i, events) in blocks.into_iter().enumerate() {
+      let number = u64::try_from(i).unwrap();
+      let (hash, returned_events, block) = self.state.write().await.make_block(number, events);
+      block_hashes.push((number, hash));
+      all_events.push(returned_events);
+      all_blocks.push(block);
+    }
+    (block_hashes, all_events, all_blocks)
   }
 
   /// Add a block with events dynamically (during a test).
   /// The block number is automatically determined as the next sequential block.
   /// Returns the hash of the newly created block.
-  pub async fn add_block_with_events(&self, events: Vec<Vec<Event>>) -> BlockHash {
+  pub async fn add_block_with_events(
+    &self,
+    events: Vec<Vec<Event>>,
+  ) -> (BlockHash, Vec<Event>, Block) {
     let mut state = self.state.write().await;
     let number =
       state.latest_finalized_block_number().map(|latest_block| latest_block + 1).unwrap_or(0);
@@ -133,7 +196,11 @@ impl SeraiShimRpc {
   }
 
   /// Create a non-linear block (wrong `builds_upon`) without advancing the chain state.
-  pub async fn make_non_linear_block(&self, number: u64, events: Vec<Vec<Event>>) -> BlockHash {
+  pub async fn make_non_linear_block(
+    &self,
+    number: u64,
+    events: Vec<Vec<Event>>,
+  ) -> (BlockHash, Vec<Event>, Block) {
     let mut state = self.state.write().await;
     state.make_non_linear_block(number, events)
   }

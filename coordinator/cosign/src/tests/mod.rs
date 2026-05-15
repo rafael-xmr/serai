@@ -9,7 +9,7 @@ use std::{
 
 use borsh::{BorshSerialize, BorshDeserialize};
 
-use rand_core::{RngCore, CryptoRng, OsRng};
+use rand_core::{RngCore as _, OsRng};
 use rand::{Rng as _, seq::SliceRandom as _};
 
 use serai_client_serai::{
@@ -26,17 +26,15 @@ use serai_client_serai::{
 use serai_db::{DbTxn, Db as _, MemDb};
 use serai_task::{
   ContinuallyRan, Task,
-  test_helpers::{IntoTask, TaskTest},
+  test_helpers::{IntoTask, TaskTest, IntoShimSerai},
+  impl_serai_task_test_struct,
 };
 use serai_cosign_types::{
   SignedCosign,
-  tests::{
-    random_external_network_id, random_global_session, random_cosign_intent, random_cosign,
-    sign_cosign,
-  },
+  test_helpers::{random_cosign_intent, random_cosign, sign_cosign},
 };
 
-use serai_shim_rpc::{*, event_fuzzer::*};
+use serai_shim_rpc::event_fuzzer::*;
 
 use crate::{GlobalSession, RequestNotableCosigns};
 
@@ -83,23 +81,6 @@ impl RequestNotableCosigns for TestRequest {
         Ok(())
       }
     }
-  }
-}
-
-/// Create a [`SeraiShimRpc`] and an [`Arc<Serai>`] to use it.
-async fn setup_shim_serai() -> (SeraiShimRpc, Arc<Serai>) {
-  let shim_serai = SeraiShimRpc::start(ShimState::default()).await;
-  let serai = Arc::new(Serai::new(shim_serai.url()).unwrap());
-  (shim_serai, serai)
-}
-
-fn default_test_validator_set() -> ExternalValidatorSet {
-  ExternalValidatorSet { network: ExternalNetworkId::Bitcoin, session: Session(0) }
-}
-fn random_validator_set<R: RngCore + CryptoRng>(rng: &mut R) -> ExternalValidatorSet {
-  ExternalValidatorSet {
-    network: random_external_network_id(rng),
-    session: Session(rng.next_u32()),
   }
 }
 

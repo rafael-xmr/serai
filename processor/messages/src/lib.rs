@@ -7,7 +7,7 @@ use dkg::Participant;
 
 use serai_primitives::{
   BlockHash,
-  crypto::{KeyPair, Signature},
+  crypto::{KeyPair, Signature, TributaryValidatorSet},
   validator_sets::{Session, SlashReport},
   instructions::{SignedBatch, OutInstructionWithBalance},
 };
@@ -66,7 +66,7 @@ pub mod key_gen {
     /// Instructs the Processor to begin the key generation process.
     ///
     /// This is sent by the Coordinator when it creates the Tributary.
-    GenerateKey { session: Session, threshold: u16, evrf_public_keys: Vec<([u8; 32], Vec<u8>)> },
+    GenerateKey { session: Session, tributary_validators: TributaryValidatorSet },
     /// Received participations for the specified key generation protocol.
     ///
     /// This is sent by the Coordinator's Tributary scanner.
@@ -84,11 +84,10 @@ pub mod key_gen {
   impl core::fmt::Debug for CoordinatorMessage {
     fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> Result<(), core::fmt::Error> {
       match self {
-        CoordinatorMessage::GenerateKey { session, threshold, evrf_public_keys } => fmt
+        CoordinatorMessage::GenerateKey { session, tributary_validators } => fmt
           .debug_struct("CoordinatorMessage::GenerateKey")
           .field("session", &session)
-          .field("threshold", &threshold)
-          .field("evrf_public_keys.len()", &evrf_public_keys.len())
+          .field("tributary_validators.len()", &tributary_validators.len())
           .finish_non_exhaustive(),
         CoordinatorMessage::Participation { session, participant, .. } => fmt
           .debug_struct("CoordinatorMessage::Participation")

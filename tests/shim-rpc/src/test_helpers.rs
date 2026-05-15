@@ -2,8 +2,9 @@
 
 use serai_abi::{
   primitives::{
-    address::*, network_id::*, coin::*, balance::*, validator_sets::*, instructions::*,
+    address::*, balance::*, coin::*, instructions::*, network_id::*, validator_sets::*,
   },
+  validator_sets::ReportedSlashes,
   *,
 };
 
@@ -36,4 +37,8 @@ pub fn burn_with_instruction_event(from: SeraiAddress, to: ExternalAddress, amou
       balance: ExternalBalance { coin: ExternalCoin::Bitcoin, amount: Amount(amount) },
     },
   })
+}
+
+pub fn slash_report_event(set: ExternalValidatorSet) -> Event {
+  Event::ValidatorSets(validator_sets::Event::Slashes(ReportedSlashes::ExternalValidatorSet(set)))
 }

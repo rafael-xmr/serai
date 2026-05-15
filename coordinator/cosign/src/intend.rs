@@ -6,9 +6,11 @@ use blake2::{Digest as _, Blake2b256};
 use serai_client_serai::{
   abi::{
     primitives::{
-      network_id::ExternalNetworkId,
+      network_id::{NetworkId, ExternalNetworkId},
       balance::Amount,
-      crypto::Public,
+      crypto::{
+        Public, SubstrateAuxiliaryPubKey, EmbeddedEllipticCurveKeys as AuxiliaryKeysStruct,
+      },
       validator_sets::{Session, ExternalValidatorSet},
       address::SeraiAddress,
       merkle::IncrementalUnbalancedMerkleTree,
@@ -34,8 +36,9 @@ create_db!(
   CosignIntend {
     ScanCosignFrom: () -> u64,
     BuildsUpon: () -> IncrementalUnbalancedMerkleTree,
-    Stakes: (network: ExternalNetworkId, validator: SeraiAddress) -> Amount,
-    Validators: (set: ExternalValidatorSet) -> Vec<SeraiAddress>,
+    AuxiliaryKeys: (network: NetworkId, validator: SeraiAddress) -> AuxiliaryKeysStruct,
+    Stakes: (network: ExternalNetworkId, validator: SubstrateAuxiliaryPubKey) -> Amount,
+    Validators: (set: ExternalValidatorSet) -> Vec<SubstrateAuxiliaryPubKey>,
     LatestSet: (network: ExternalNetworkId) -> Set,
   }
 );
@@ -51,6 +54,25 @@ db_channel! {
     GlobalSessionsChannel: () -> ([u8; 32], GlobalSession),
     BlockEvents: () -> BlockEventData,
     IntendedCosigns: (set: ExternalValidatorSet) -> CosignIntent,
+  }
+}
+
+fn auxiliary_key(
+  getter: &impl Get,
+  network: ExternalNetworkId,
+  validator: SeraiAddress,
+) -> SubstrateAuxiliaryPubKey {
+  match AuxiliaryKeys::get(getter, network.into(), validator)
+    .expect("Validator broke auxiliary key invariant")
+  {
+    AuxiliaryKeysStruct::Serai(_) => {
+      unreachable!("We only coordinate over external networks")
+    }
+    AuxiliaryKeysStruct::Bitcoin(substrate, _) |
+    AuxiliaryKeysStruct::Ethereum(substrate, _) |
+    AuxiliaryKeysStruct::Monero(substrate) => {
+      SubstrateAuxiliaryPubKey::from_bytes(substrate).expect("invalid auxiliary key")
+    }
   }
 }
 
@@ -135,32 +157,59 @@ impl<D: Db> ContinuallyRan for CosignIntendTask<D> {
         let mut has_events = HasEvents::No;
         let vset_events = serai_block_events.validator_sets();
 
+        // Handle auxiliary keys set
+        for event in vset_events.set_embedded_elliptic_curve_keys_events() {
+          let Event::SetEmbeddedEllipticCurveKeys { validator, keys } = &event else {
+            unreachable!(
+              "{}: {event:?}",
+              "`SetEmbeddedEllipticCurveKeys` event wasn't a `SetEmbeddedEllipticCurveKeys` event"
+            );
+          };
+
+          // We only coordinate over external networks
+          let Ok(network) = ExternalNetworkId::try_from(keys.network()) else { continue };
+
+          /*
+            It's a documented invariant that all validators, for any network, must have this auxiliary
+            key set. Currently, it's enforced by all genesis validators being required to set auxiliary
+            keys for _every_ network, and auxiliary keys being required to be set _before_ stake may
+            be allocated.
+
+            As those are the only two ways to qualify to be selected as a validator, this invariant
+            holds.
+          */
+
+          AuxiliaryKeys::set(&mut txn, network.into(), *validator, keys);
+        }
+
         // Update the stakes
         for event in vset_events.allocation_events() {
           let Event::Allocation { validator, network, amount } = event else {
             unreachable!("event from `allocation_events` wasn't `Event::Allocation`")
           };
+
+          // We only coordinate over external networks
           let Ok(network) = ExternalNetworkId::try_from(*network) else {
-            // Not an `ExternalNetworkId` and therefore would be a Serai network allocation
-            // safe to just skip this allocation event
             continue;
           };
 
-          let existing = Stakes::get(&txn, network, *validator).unwrap_or(Amount(0));
-          Stakes::set(&mut txn, network, *validator, &Amount(existing.0 + amount.0));
+          let auxiliary_key = auxiliary_key(&txn, network, *validator);
+          let existing = Stakes::get(&txn, network, auxiliary_key).unwrap_or(Amount(0));
+          Stakes::set(&mut txn, network, auxiliary_key, &Amount(existing.0 + amount.0));
         }
         for event in vset_events.deallocation_events() {
           let Event::Deallocation { validator, network, amount, timeline: _ } = event else {
             unreachable!("event from `deallocation_events` wasn't `Event::Deallocation`")
           };
+
+          // We only coordinate over external networks
           let Ok(network) = ExternalNetworkId::try_from(*network) else {
-            // Not an `ExternalNetworkId` and therefore would be a Serai network allocation
-            // safe to skip this deallocation event
             continue;
           };
 
-          let existing = Stakes::get(&txn, network, *validator).unwrap_or(Amount(0));
-          Stakes::set(&mut txn, network, *validator, &Amount(existing.0 - amount.0));
+          let auxiliary_key = auxiliary_key(&txn, network, *validator);
+          let existing = Stakes::get(&txn, network, auxiliary_key).unwrap_or(Amount(0));
+          Stakes::set(&mut txn, network, auxiliary_key, &Amount(existing.0 - amount.0));
         }
 
         // Handle decided sets
@@ -169,15 +218,17 @@ impl<D: Db> ContinuallyRan for CosignIntendTask<D> {
             unreachable!("event from `set_decided_events` wasn't `Event::SetDecided`")
           };
 
+          // We only coordinate over external networks
           let Ok(set) = ExternalValidatorSet::try_from(*set) else { continue };
 
           assert!(!validators.is_empty(), "validator set from Event::SetDecided was empty");
 
-          Validators::set(
-            &mut txn,
-            set,
-            &validators.iter().map(|(validator, _key_shares)| *validator).collect(),
-          );
+          let validators = &validators
+            .iter()
+            .map(|(validator, _)| auxiliary_key(&txn, set.network, *validator))
+            .collect();
+
+          Validators::set(&mut txn, set, validators);
         }
 
         // Handle declarations of the latest set

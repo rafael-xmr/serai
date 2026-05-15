@@ -17,6 +17,16 @@ pub fn init_logger() {
     .unwrap();
 }
 
+/// Extract the message from a `catch_unwind` payload, covering both
+/// `&'static str` (e.g. `panic!("literal")`) and `String` (e.g. `panic!("fmt {}", v)`).
+pub fn panic_message(payload: &Box<dyn core::any::Any + Send>) -> &str {
+  payload
+    .downcast_ref::<&str>()
+    .copied()
+    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+    .unwrap_or("<non-string panic payload>")
+}
+
 /// Coverage-gated `trace!`. Compiles to nothing under `cfg(coverage)`.
 #[cfg(not(coverage))]
 #[macro_export]

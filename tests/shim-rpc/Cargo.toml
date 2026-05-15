@@ -23,9 +23,11 @@ hex = { version = "0.4", default-features = false, features = ["std"] }
 borsh = { version = "1", default-features = false, features = ["std", "derive"] }
 
 rand_core = { version = "0.6", default-features = false }
+bitvec = { version = "1.0", default-features = false, features = ["std"] }
 blake2 = { version = "0.11.0-rc.0", default-features = false }
 schnorrkel = { version = "0.11", default-features = false, features = ["std"] }
 
+serai-client-serai = { path = "../../substrate/client/serai" }
 serai-primitives = { path = "../../substrate/primitives", features = ["std", "test-helpers"] }
 serai-abi = { path = "../../substrate/abi", default-features = false, features = ["std"] }
 

@@ -8,6 +8,8 @@ struct DelayTest {
   db: MemDb,
 }
 
+impl_serai_task_test_struct!(DelayTest, { db: db });
+
 impl Default for DelayTest {
   fn default() -> Self {
     Self { db: MemDb::new() }
